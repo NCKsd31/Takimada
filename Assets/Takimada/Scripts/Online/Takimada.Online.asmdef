@@ -1,0 +1,28 @@
+{
+    "name": "Takimada.Online",
+    "rootNamespace": "Takimada",
+    "references": [
+        "Takimada",
+        "Unity.Netcode.Runtime",
+        "Unity.Services.Core",
+        "Unity.Services.Authentication",
+        "Unity.Services.Multiplayer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "TAKIMADA_UGS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.services.multiplayer",
+            "expression": "1.0.0",
+            "define": "TAKIMADA_UGS"
+        }
+    ],
+    "noEngineReferences": false
+}
