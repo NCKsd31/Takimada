@@ -1,0 +1,24 @@
+Kaynak simgeleri game-icons.net'ten alındı (CC BY 3.0, https://creativecommons.org/licenses/by/3.0/).
+
+odun.bytes   - "Wood pile"   - Delapouite
+tugla.bytes  - "Brick pile"  - Delapouite
+koyun.bytes  - "Sheep"       - Delapouite
+bugday.bytes - "Wheat"       - Lorc
+tas.bytes    - "Stone pile"  - Delapouite
+
+https://game-icons.net
+
+Oyuncu paneli simgeleri (aynı kaynak ve lisans):
+muhafiz.bytes - "Cowled"       - Lorc
+cekic.bytes   - "Claw hammer"  - Lorc
+yol.bytes     - "Stone path"   - Delapouite
+
+Ticaret simgeleri (aynı kaynak ve lisans):
+banka.bytes     - "Bank"          - Delapouite
+oyuncular.bytes - "Meeple group"  - Delapouite
+
+Gelişim kartı simgeleri (aynı kaynak ve lisans):
+zafer.bytes     - "Laurel crown"  - Lorc
+yolyapimi.bytes - "Wheelbarrow"   - Delapouite
+bereket.bytes   - "Cornucopia"    - Delapouite
+tekel.bytes     - "Magnet"        - Lorc

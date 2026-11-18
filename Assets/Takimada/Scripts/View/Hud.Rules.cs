@@ -18,11 +18,11 @@ namespace Takimada
         {
             Panel(r);
             var c = app.lobby.cfg;
-            GUILayout.BeginArea(new Rect(r.x + 16, r.y + 14, r.width - 32, r.height - 28));
+            BeginArea(new Rect(r.x + 16, r.y + 14, r.width - 32, r.height - 28));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Kurallar", Sty.h1);
+            LLabel("Kurallar", Sty.h1);
             GUILayout.FlexibleSpace();
-            GUILayout.Label(editable ? "Kurucu düzenliyor · " + c.presetName : "Salt okunur · " + c.presetName, Sty.dim);
+            LLabel(editable ? "Kurucu düzenliyor · " + c.presetName : "Salt okunur · " + c.presetName, Sty.dim);
             GUILayout.EndHorizontal();
 
             if (editable)
@@ -57,17 +57,17 @@ namespace Takimada
                     catch { rulesNote = "Panoda geçerli kural JSON'u yok."; }
                 }
                 GUILayout.EndHorizontal();
-                if (!string.IsNullOrEmpty(rulesNote)) GUILayout.Label(rulesNote, Sty.dim);
+                if (!string.IsNullOrEmpty(rulesNote)) LLabel(rulesNote, Sty.dim);
             }
 
             GUILayout.Space(4);
             GUILayout.BeginHorizontal();
             for (int i = 0; i < RuleTabs.Length; i++)
-                if (GUILayout.Button(RuleTabs[i], i == rulesTab ? Sty.tabOn : Sty.tab, GUILayout.Height(30))) rulesTab = i;
+                if (LButton(RuleTabs[i], i == rulesTab ? Sty.tabOn : Sty.tab, GUILayout.Height(30))) rulesTab = i;
             GUILayout.EndHorizontal();
             GUILayout.Space(6);
 
-            rulesScroll = GUILayout.BeginScrollView(rulesScroll);
+            rulesScroll = BeginLayoutScroll(1, rulesScroll);
             bool oldEnabled = GUI.enabled;
             GUI.enabled = editable;
             GUI.changed = false;
@@ -86,15 +86,15 @@ namespace Takimada
                 app.MarkLobbyDirty();
             }
             GUI.enabled = oldEnabled;
-            GUILayout.EndScrollView();
+            EndLayoutScroll(1);
 
             var warn = c.Warnings();
             if (warn.Count > 0)
             {
                 GUILayout.Space(4);
-                foreach (var w in warn) GUILayout.Label("• " + w, Sty.Colored(Sty.small, Sty.Brass));
+                foreach (var w in warn) LLabel("• " + w, Sty.Colored(Sty.small, Sty.Brass));
             }
-            GUILayout.EndArea();
+            EndArea();
         }
 
         // ---------------- satır bileşenleri ----------------
@@ -102,17 +102,17 @@ namespace Takimada
         void Section(string title, string hint = null)
         {
             GUILayout.Space(10);
-            GUILayout.Label(title, Sty.h2);
-            if (!string.IsNullOrEmpty(hint)) GUILayout.Label(hint, Sty.dim);
+            LLabel(title, Sty.h2);
+            if (!string.IsNullOrEmpty(hint)) LLabel(hint, Sty.dim);
         }
 
         void IntRow(string label, ref int v, int min, int max, int step = 1, string unit = "")
         {
             GUILayout.BeginHorizontal(GUILayout.Height(28));
-            GUILayout.Label(label, Sty.label, GUILayout.Width(LabelW));
-            if (GUILayout.Button("−", Sty.btnSmall, GUILayout.Width(28), GUILayout.Height(24))) { v = Math.Max(min, v - step); GUI.changed = true; }
-            GUILayout.Label(v + unit, Sty.center, GUILayout.Width(64));
-            if (GUILayout.Button("+", Sty.btnSmall, GUILayout.Width(28), GUILayout.Height(24))) { v = Math.Min(max, v + step); GUI.changed = true; }
+            LLabel(label, Sty.label, GUILayout.Width(LabelW));
+            if (LButton("−", Sty.btnSmall, GUILayout.Width(28), GUILayout.Height(24))) { v = Math.Max(min, v - step); GUI.changed = true; }
+            LLabel(v + unit, Sty.center, GUILayout.Width(64));
+            if (LButton("+", Sty.btnSmall, GUILayout.Width(28), GUILayout.Height(24))) { v = Math.Min(max, v + step); GUI.changed = true; }
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
         }
@@ -120,34 +120,34 @@ namespace Takimada
         void BoolRow(string label, ref bool v, string hint = null)
         {
             GUILayout.BeginHorizontal(GUILayout.Height(28));
-            GUILayout.Label(label, Sty.label, GUILayout.Width(LabelW));
-            if (GUILayout.Button(v ? "Açık" : "Kapalı", v ? Sty.btnOn : Sty.btnSmall, GUILayout.Width(126), GUILayout.Height(24))) { v = !v; GUI.changed = true; }
+            LLabel(label, Sty.label, GUILayout.Width(LabelW));
+            if (LButton(v ? "Açık" : "Kapalı", v ? Sty.btnOn : Sty.btnSmall, GUILayout.Width(126), GUILayout.Height(24))) { v = !v; GUI.changed = true; }
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
-            if (!string.IsNullOrEmpty(hint)) GUILayout.Label(hint, Sty.dim);
+            if (!string.IsNullOrEmpty(hint)) LLabel(hint, Sty.dim);
         }
 
         void ChoiceRow(string label, ref int v, string[] options)
         {
             GUILayout.BeginHorizontal(GUILayout.Height(28));
-            GUILayout.Label(label, Sty.label, GUILayout.Width(LabelW));
+            LLabel(label, Sty.label, GUILayout.Width(LabelW));
             for (int i = 0; i < options.Length; i++)
-                if (GUILayout.Button(options[i], i == v ? Sty.btnOn : Sty.btnSmall, GUILayout.Height(24))) { v = i; GUI.changed = true; }
+                if (LButton(options[i], i == v ? Sty.btnOn : Sty.btnSmall, GUILayout.Height(24))) { v = i; GUI.changed = true; }
             GUILayout.EndHorizontal();
         }
 
         void ResRow(string label, int[] arr, int max = 9)
         {
-            GUILayout.Label(label, Sty.label);
+            LLabel(label, Sty.label);
             GUILayout.BeginHorizontal();
             for (int i = 0; i < T.ResCount; i++)
             {
                 GUILayout.BeginVertical(GUILayout.Width(96));
-                GUILayout.Label(T.Res[i], Sty.Colored(Sty.small, Pal.Res[i]));
+                LLabel(T.Res[i], Sty.Colored(Sty.small, Pal.Res[i]));
                 GUILayout.BeginHorizontal();
-                if (GUILayout.Button("−", Sty.btnSmall, GUILayout.Width(24), GUILayout.Height(22))) { arr[i] = Math.Max(0, arr[i] - 1); GUI.changed = true; }
-                GUILayout.Label(arr[i].ToString(), Sty.center, GUILayout.Width(28));
-                if (GUILayout.Button("+", Sty.btnSmall, GUILayout.Width(24), GUILayout.Height(22))) { arr[i] = Math.Min(max, arr[i] + 1); GUI.changed = true; }
+                if (LButton("−", Sty.btnSmall, GUILayout.Width(24), GUILayout.Height(22))) { arr[i] = Math.Max(0, arr[i] - 1); GUI.changed = true; }
+                LLabel(arr[i].ToString(), Sty.center, GUILayout.Width(28));
+                if (LButton("+", Sty.btnSmall, GUILayout.Width(24), GUILayout.Height(22))) { arr[i] = Math.Min(max, arr[i] + 1); GUI.changed = true; }
                 GUILayout.EndHorizontal();
                 GUILayout.EndVertical();
             }
@@ -156,8 +156,8 @@ namespace Takimada
 
         string TextRow(string label, string v)
         {
-            GUILayout.Label(label, Sty.label);
-            return GUILayout.TextField(v ?? "", 400, Sty.field, GUILayout.Height(32));
+            LLabel(label, Sty.label);
+            return LField(v ?? "", 400, Sty.field, GUILayout.Height(32));
         }
 
         // ---------------- sekmeler ----------------
@@ -169,9 +169,19 @@ namespace Takimada
             IntRow("En fazla oyuncu", ref c.maxPlayers, 2, 8);
             BoolRow("Oyuncu sırası rastgele", ref c.randomTurnOrder);
 
+            Section("Süre", "Zar süresi dolunca zar kendiliğinden atılır, tur süresi dolunca tur biter. Sırası gelen oyuncu her hamle yaptığında süresi uzar (tur süresini aşmaz).");
+            BoolRow("Tur süresi", ref c.turnTimer);
+            if (c.turnTimer)
+            {
+                IntRow("Zar atma süresi", ref c.rollSeconds, 3, 120, 1, " sn");
+                IntRow("Ticaret ve inşa süresi", ref c.turnSeconds, 10, 600, 5, " sn");
+                IntRow("Hamle başına ek süre", ref c.actionBonusSeconds, 0, 120, 1, " sn");
+                IntRow("Kart atma / korsan / ek inşa", ref c.shortPhaseSeconds, 5, 120, 5, " sn");
+            }
+
             Section("Zar");
             ChoiceRow("Zar türü", ref c.diceMode, new[] { "Gerçek zar", "Dengeli deste" });
-            GUILayout.Label("Dengeli deste: 36 zar kombinasyonu karıştırılır, 5 kart kalınca yeniden karılır. Şans daha adil dağılır.", Sty.dim);
+            LLabel("Dengeli deste: 36 zar kombinasyonu karıştırılır, 5 kart kalınca yeniden karılır. Şans daha adil dağılır.", Sty.dim);
 
             Section("Başlangıç dizilimi");
             IntRow("Başlangıç köyü sayısı (tur)", ref c.setupRounds, 1, 4);
@@ -193,7 +203,7 @@ namespace Takimada
             Section("Ada şekli", "Satır uzunlukları yukarıdan aşağıya. Komşu satırlar 1 farklı olmalı.");
             GUILayout.BeginHorizontal();
             foreach (var s in Shapes)
-                if (GUILayout.Button(s.name, Sty.btnSmall, GUILayout.Height(26)))
+                if (LButton(s.name, Sty.btnSmall, GUILayout.Height(26)))
                 {
                     c.rowLengths = s.rows;
                     AutoBalanceTerrain(c);
@@ -202,7 +212,7 @@ namespace Takimada
                 }
             GUILayout.EndHorizontal();
             c.rowLengths = TextRow("Satır uzunlukları", c.rowLengths);
-            GUILayout.Label("Kara karosu: " + c.LandCount() + " · Arazi toplamı: " + c.TerrainTotal() + " · Üretim karosu: " + c.ProducingCount(), Sty.dim);
+            LLabel("Kara karosu: " + c.LandCount() + " · Arazi toplamı: " + c.TerrainTotal() + " · Üretim karosu: " + c.ProducingCount(), Sty.dim);
 
             Section("Araziler");
             for (int t = 0; t < 6; t++)
@@ -210,13 +220,13 @@ namespace Takimada
                 string res = t == 0 ? "üretmez, korsan başlar" : T.Res[t - 1];
                 IntRow(T.Terrain[t] + "  (" + res + ")", ref c.terrainCounts[t], 0, 30);
             }
-            if (GUILayout.Button("Arazileri harita boyutuna dengele", Sty.btnSmall, GUILayout.Height(26))) { AutoBalanceTerrain(c); GUI.changed = true; }
+            if (LButton("Arazileri harita boyutuna dengele", Sty.btnSmall, GUILayout.Height(26))) { AutoBalanceTerrain(c); GUI.changed = true; }
 
             Section("Sayı pulları", "2-12 arası sayılar. Eksikse tekrar edilerek tamamlanır.");
             c.numberTokens = TextRow("Pullar", c.numberTokens);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Pul sayısı: " + Util.ParseInts(c.numberTokens).Count + " / gereken " + c.ProducingCount(), Sty.dim);
-            if (GUILayout.Button("Otomatik doldur", Sty.btnSmall, GUILayout.Width(140), GUILayout.Height(24))) { c.numberTokens = AutoTokens(c.ProducingCount()); GUI.changed = true; }
+            LLabel("Pul sayısı: " + Util.ParseInts(c.numberTokens).Count + " / gereken " + c.ProducingCount(), Sty.dim);
+            if (LButton("Otomatik doldur", Sty.btnSmall, GUILayout.Width(140), GUILayout.Height(24))) { c.numberTokens = AutoTokens(c.ProducingCount()); GUI.changed = true; }
             GUILayout.EndHorizontal();
             BoolRow("Pulları karıştır", ref c.shuffleNumbers);
             BoolRow("6 ve 8 yan yana gelmesin", ref c.separateRedNumbers);
@@ -230,9 +240,9 @@ namespace Takimada
             Section("Harita tohumu", "0 = her oyunda yeni harita: araziler, sayılar ve limanlar oyun başlarken rastgele dağıtılır. Aynı sayı her seferinde aynı haritayı üretir.");
             IntRow("Tohum", ref c.mapSeed, 0, 99999);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Rastgele tohum", Sty.btnSmall, GUILayout.Height(26))) { c.mapSeed = UnityEngine.Random.Range(1, 99999); GUI.changed = true; }
+            if (LButton("Rastgele tohum", Sty.btnSmall, GUILayout.Height(26))) { c.mapSeed = UnityEngine.Random.Range(1, 99999); GUI.changed = true; }
             bool old = GUI.enabled; GUI.enabled = true;
-            if (GUILayout.Button("Önizlemeyi yenile", Sty.btnSmall, GUILayout.Height(26))) previewSeed = UnityEngine.Random.Range(1, 999999);
+            if (LButton("Önizlemeyi yenile", Sty.btnSmall, GUILayout.Height(26))) previewSeed = UnityEngine.Random.Range(1, 999999);
             GUI.enabled = old;
             GUILayout.EndHorizontal();
         }
@@ -267,11 +277,11 @@ namespace Takimada
             BoolRow("Korsan", ref c.robberEnabled);
             IntRow("Korsanı getiren zar", ref c.robberRoll, 2, 12);
             IntRow("Kart atma sınırı", ref c.discardLimit, 0, 30);
-            GUILayout.Label("Korsan zarı gelince elinde bu sayıdan fazla kart olan, yarısını (aşağı yuvarlanır) atar.", Sty.dim);
+            LLabel("Korsan zarı gelince elinde bu sayıdan fazla kart olan, yarısını (aşağı yuvarlanır) atar.", Sty.dim);
             BoolRow("Korsan volkanda başlar", ref c.robberStartsOnDesert);
             BoolRow("Korsanlı karo üretmez", ref c.robberBlocksProduction);
             IntRow("Dostane korsan: koruma puanı", ref c.friendlyRobberVP, 0, 10);
-            GUILayout.Label("0 kapalı. Örn. 2: puanı 2 veya altındaki oyunculardan çalınamaz, karolarına korsan konamaz.", Sty.dim);
+            LLabel("0 kapalı. Örn. 2: puanı 2 veya altındaki oyunculardan çalınamaz, karolarına korsan konamaz.", Sty.dim);
             IntRow("Korsansız ilk tur sayısı", ref c.robberGraceRounds, 0, 10);
         }
 

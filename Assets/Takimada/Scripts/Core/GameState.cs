@@ -78,6 +78,10 @@ namespace Takimada
         public int[] lastProduction = new int[0]; // son zarla üreten altıgenler (görsel vurgu)
         public int version;
 
+        // Süre: sunucu her gönderimde doldurur. İstemci, durumu aldığı andan itibaren kendisi geri sayar.
+        public float timerLeft = -1;   // -1 = süre yok
+        public float timerTotal;
+
         public GameState Clone() => UnityEngine.JsonUtility.FromJson<GameState>(UnityEngine.JsonUtility.ToJson(this));
 
         /// <summary>Belirli bir oyuncuya gönderilecek kopya: rakiplerin gelişim kartları ve deste sırası gizlenir.</summary>

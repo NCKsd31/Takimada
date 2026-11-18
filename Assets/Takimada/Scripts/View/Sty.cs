@@ -101,10 +101,16 @@ namespace Takimada
             Fill(new Rect(r.xMax - w, r.y, w, r.height), c);
         }
 
+        static readonly System.Collections.Generic.Dictionary<(GUIStyle, Color), GUIStyle> colored =
+            new System.Collections.Generic.Dictionary<(GUIStyle, Color), GUIStyle>();
+
+        /// <summary>Aynı stilin başka yazı rengiyle kopyası. Önbellekli: döndürülen stil değiştirilmemeli.</summary>
         public static GUIStyle Colored(GUIStyle s, Color c)
         {
-            var n = new GUIStyle(s);
+            if (colored.TryGetValue((s, c), out var n)) return n;
+            n = new GUIStyle(s);
             n.normal.textColor = c;
+            colored[(s, c)] = n;
             return n;
         }
     }

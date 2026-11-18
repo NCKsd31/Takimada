@@ -90,6 +90,16 @@ namespace Takimada
             if (a.player < 0 || a.player >= S.players.Count) return "Geçersiz oyuncu.";
             if (a.give == null || a.give.Length != 5) a.give = new int[5];
             if (a.get == null || a.get.Length != 5) a.get = new int[5];
+            var prevPhase = S.phase;
+            int prevActor = Rules.Actor(S), prevTurn = S.turn;
+            bool byActor = !autoAct && a.player == prevActor && a.type != Act.Chat;
+            string err = ApplyInner(a);
+            if (err == null) UpdateTimer(prevPhase, prevActor, prevTurn, byActor);
+            return err;
+        }
+
+        string ApplyInner(GameAction a)
+        {
             string err;
             switch (a.type)
             {
@@ -704,6 +714,141 @@ namespace Takimada
                 S.offers.Clear();
                 Log(N(p) + " " + Rules.TotalVP(S, p) + " puanla kazandı!");
             }
+        }
+
+        // ---------------- Süre ----------------
+
+        /// <summary>Saniye cinsinden gerçek zaman; App (Unity) bağlar. Motor Unity'den bağımsız kalır.</summary>
+        public Func<double> Clock = () => 0;
+        double deadline = -1;
+        float timerTotal;
+        int mainTurn = -1;   // ana süresi başlamış olan tur
+        bool autoAct;
+
+        public float TimeLeft => deadline < 0 ? -1f : (float)Math.Max(0, deadline - Clock());
+        public float TimeTotal => timerTotal;
+
+        /// <summary>Oyun başlarken ilk aşamanın süresini başlatır (Clock bağlandıktan sonra çağrılır).</summary>
+        public void StartClock() => UpdateTimer(Phase.GameOver, -2, -1, false);
+
+        void StartTimer(int seconds)
+        {
+            timerTotal = seconds;
+            deadline = Clock() + seconds;
+        }
+
+        void Bonus()
+        {
+            if (deadline < 0) return;
+            deadline = Math.Min(deadline + S.cfg.actionBonusSeconds, Clock() + S.cfg.turnSeconds);
+        }
+
+        /// <summary>
+        /// Aşama değiştiyse süreyi yeniden kurar. Ticaret/inşa süresi tur başına bir kez başlar;
+        /// tur içindeki ara aşamalar (muhafızla korsan, yol yapımı) bu süreden yer. Sırası gelen hamle yaptıkça süre uzar.
+        /// </summary>
+        void UpdateTimer(Phase prevPhase, int prevActor, int prevTurn, bool byActor)
+        {
+            var c = S.cfg;
+            if (!c.turnTimer || S.phase == Phase.GameOver) { deadline = -1; return; }
+            int actor = Rules.Actor(S);
+            bool changed = S.phase != prevPhase || actor != prevActor || S.turn != prevTurn;
+            bool mainClock = mainTurn == S.turn && S.turn > 0 &&
+                (S.phase == Phase.Main || S.phase == Phase.RoadBuilding || S.phase == Phase.MoveRobber || S.phase == Phase.Steal);
+            if (!changed)
+            {
+                if (byActor && mainClock) Bonus();
+                return;
+            }
+            switch (S.phase)
+            {
+                case Phase.SetupSettlement:
+                case Phase.SetupRoad:
+                    StartTimer(c.turnSeconds); break;
+                case Phase.Roll:
+                    StartTimer(c.rollSeconds); break;
+                case Phase.Discard:
+                case Phase.SpecialBuild:
+                    StartTimer(c.shortPhaseSeconds); break;
+                default:
+                    if (mainClock) { if (byActor) Bonus(); }
+                    else if (S.phase == Phase.Main) { mainTurn = S.turn; StartTimer(c.turnSeconds); }
+                    else StartTimer(c.shortPhaseSeconds); // 7 sonrası korsan, zardan önce oynanan kart
+                    break;
+            }
+        }
+
+        /// <summary>Sunucu her kare çağırır. Süre dolduysa sıradaki hamleyi kendisi yapar; durum değiştiyse true.</summary>
+        public bool Tick()
+        {
+            if (deadline < 0 || S.phase == Phase.GameOver || Clock() < deadline) return false;
+            bool any = false;
+            for (int guard = 0; guard < 24 && deadline >= 0 && S.phase != Phase.GameOver && Clock() >= deadline; guard++)
+            {
+                if (!Timeout()) { deadline = -1; break; }
+                any = true;
+            }
+            return any;
+        }
+
+        int PickRandom(List<int> list) => list[rng.Next(list.Count)];
+
+        bool Timeout()
+        {
+            int p = Rules.Actor(S);
+            if (p < 0) return false;
+            switch (S.phase)
+            {
+                case Phase.SetupSettlement:
+                {
+                    var spots = Rules.SettleSpots(S, p, true);
+                    return spots.Count > 0 && Auto(new GameAction { type = Act.PlaceSettlement, player = p, target = PickRandom(spots) }, N(p) + " için süre doldu, köy rastgele yerleştirildi.");
+                }
+                case Phase.SetupRoad:
+                {
+                    var spots = Rules.RoadSpots(S, p);
+                    return spots.Count > 0 && Auto(new GameAction { type = Act.PlaceRoad, player = p, target = PickRandom(spots) }, N(p) + " için süre doldu, yol rastgele yerleştirildi.");
+                }
+                case Phase.Roll:
+                    return Auto(new GameAction { type = Act.Roll, player = p }, N(p) + " için süre doldu, zar otomatik atıldı.");
+                case Phase.Discard:
+                {
+                    int q = Array.FindIndex(S.discardPending, x => x > 0);
+                    if (q < 0) return false;
+                    var hand = new List<int>();
+                    for (int r = 0; r < 5; r++) for (int k = 0; k < S.players[q].res[r]; k++) hand.Add(r);
+                    Util.Shuffle(hand, rng);
+                    var give = new int[5];
+                    for (int k = 0; k < S.discardPending[q] && k < hand.Count; k++) give[hand[k]]++;
+                    return Auto(new GameAction { type = Act.Discard, player = q, give = give }, N(q) + " için süre doldu, kartlar rastgele atıldı.");
+                }
+                case Phase.MoveRobber:
+                {
+                    var spots = Rules.RobberSpots(S);
+                    return spots.Count > 0 && Auto(new GameAction { type = Act.MoveRobber, player = p, target = PickRandom(spots) }, N(p) + " için süre doldu, korsan rastgele taşındı.");
+                }
+                case Phase.Steal:
+                {
+                    var targets = Rules.StealTargets(S, p, S.robber);
+                    return targets.Count > 0 && Auto(new GameAction { type = Act.Steal, player = p, target = PickRandom(targets) }, N(p) + " için süre doldu, rastgele birinden çalındı.");
+                }
+                case Phase.RoadBuilding:
+                case Phase.Main:
+                case Phase.SpecialBuild:
+                    return Auto(new GameAction { type = Act.EndTurn, player = p }, N(p) + " için süre doldu, tur bitti.");
+            }
+            return false;
+        }
+
+        bool Auto(GameAction a, string msg)
+        {
+            Log(msg);
+            autoAct = true;
+            string err;
+            try { err = Apply(a); }
+            finally { autoAct = false; }
+            if (err != null) S.log.RemoveAt(S.log.Count - 1);
+            return err == null;
         }
 
         public void SetConnected(int p, bool c)

@@ -8,7 +8,7 @@ namespace Takimada
     {
         public static Color Hex(string h) { ColorUtility.TryParseHtmlString(h, out var c); return c; }
 
-        public static readonly Color Haze = Hex("#6F8A93");
+        public static readonly Color Haze = Hex("#5E93A6");
         public static readonly Color Ink = Hex("#1B1712");
         public static readonly Color Token = Hex("#F2E6CC");
         public static readonly Color TokenEdge = Hex("#6B5A3E");
@@ -28,7 +28,7 @@ namespace Takimada
         // Odun, Tuğla, Koyun, Buğday, Taş
         public static readonly Color[] Res =
         {
-            Hex("#C49A6C"), Hex("#DE8A70"), Hex("#EDEAE0"), Hex("#EDD48A"), Hex("#B5BBC1")
+            Hex("#D98A3D"), Hex("#E2553A"), Hex("#8FD14F"), Hex("#F5C531"), Hex("#8EA6C2")
         };
 
         public static readonly string[] PlayerNames = { "Kırmızı", "Mavi", "Turuncu", "Beyaz", "Mor", "Pembe", "Turkuaz", "Kahve" };
@@ -61,8 +61,21 @@ namespace Takimada
         public float Sat = 1f, Lift = 0f;
 
         readonly List<Vector2> uv = new List<Vector2>();
+        readonly List<Vector4> an = new List<Vector4>();
 
-        public void Clear() { v.Clear(); n.Clear(); c.Clear(); t.Clear(); uv.Clear(); }
+        /// <summary>
+        /// Bundan sonra eklenen üçgenlerin shader'da nasıl oynayacağı (TEXCOORD1):
+        /// x,y = dönme/sallanma merkezi (dünya x,z), z = faz (0-1), w = tür (0 sabit, 1 koyun gövdesi, 2 koyun başı, 3 gemi,
+        /// 4 yunus, 5 balina, 6 balina fıskiyesi, 7 duman). 4 ve üstünde z'nin tam kısmı ek bilgi taşır (bkz. Packed).
+        /// </summary>
+        public Vector4 Anim;
+
+        public const float AnimSheep = 1, AnimSheepHead = 2, AnimShip = 3, AnimDolphin = 4, AnimWhale = 5, AnimSpout = 6, AnimSmoke = 7;
+
+        /// <summary>z bileşeni: tam kısım = param (yön derecesi ya da yükseklik×1000), kesirli kısım = faz.</summary>
+        public static float Packed(float param, float phase) => Mathf.Floor(Mathf.Max(0f, param)) + Mathf.Repeat(phase, 1f) * 0.999f;
+
+        public void Clear() { v.Clear(); n.Clear(); c.Clear(); t.Clear(); uv.Clear(); an.Clear(); Anim = Vector4.zero; }
 
         public void Tri(Vector3 a, Vector3 b, Vector3 d, Color col) => TriUV(a, b, d, Vector2.zero, Vector2.zero, Vector2.zero, col);
 
@@ -76,6 +89,7 @@ namespace Takimada
             v.Add(a); v.Add(b); v.Add(d);
             n.Add(nn); n.Add(nn); n.Add(nn);
             uv.Add(ua); uv.Add(ub); uv.Add(ud);
+            an.Add(Anim); an.Add(Anim); an.Add(Anim);
             Color32 cc = col;
             c.Add(cc); c.Add(cc); c.Add(cc);
             t.Add(s); t.Add(s + 1); t.Add(s + 2);
@@ -130,17 +144,49 @@ namespace Takimada
             Quad(P(-x, 0, -z), P(x, 0, -z), P(x, 0, z), P(-x, 0, z), col);
         }
 
-        /// <summary>Beşik çatı: b saçak yüksekliğindeki merkez, mahya yerel z ekseni boyunca.</summary>
+        /// <summary>Beşik çatı: b saçak yüksekliğindeki merkez, mahya yerel z ekseni boyunca. Yüzler dışa bakar.</summary>
         public void Roof(Vector3 b, float w, float d, float h, float yaw, Color roof, Color gable, float overhang)
         {
             var q = Quaternion.Euler(0, yaw, 0);
             float x = w / 2 + overhang, z = d / 2 + overhang, gx = w / 2, gz = d / 2;
             Vector3 P(float px, float py, float pz) => b + q * new Vector3(px, py, pz);
             var r0 = P(0, h, -z); var r1 = P(0, h, z);
-            Quad(P(-x, -overhang * 0.6f, -z), r0, r1, P(-x, -overhang * 0.6f, z), roof);
-            Quad(P(x, -overhang * 0.6f, -z), P(x, -overhang * 0.6f, z), r1, r0, roof);
-            Tri(P(-gx, 0, -gz), P(gx, 0, -gz), P(0, h, -gz), gable);
-            Tri(P(-gx, 0, gz), P(0, h, gz), P(gx, 0, gz), gable);
+            Quad(P(-x, -overhang * 0.6f, z), r1, r0, P(-x, -overhang * 0.6f, -z), roof);
+            Quad(r0, r1, P(x, -overhang * 0.6f, z), P(x, -overhang * 0.6f, -z), roof);
+            Tri(P(-gx, 0, -gz), P(0, h, -gz), P(gx, 0, -gz), gable);
+            Tri(P(-gx, 0, gz), P(gx, 0, gz), P(0, h, gz), gable);
+        }
+
+        /// <summary>
+        /// Roof'un dış hat kabuğu: çatıyı t kadar dışarıdan saran kapalı üçgen prizma (altı da kapalı).
+        /// Ön yüzleri kırpılarak (Cull Front) çizilince çatının çevresinde ince koyu bir çizgi kalır.
+        /// </summary>
+        public void RoofShell(Vector3 b, float w, float d, float h, float yaw, float overhang, float t, Color col)
+        {
+            var q = Quaternion.Euler(0, yaw, 0);
+            Vector3 P(float px, float py, float pz) => b + q * new Vector3(px, py, pz);
+            // eğik yüzü normali boyunca t kadar kaydır; mahya ve saçak (t kadar aşağıda) bu doğru üstünde
+            float xe = w / 2 + overhang, ye = -overhang * 0.6f, rise = h - ye;
+            float len = Mathf.Sqrt(xe * xe + rise * rise);
+            float ry = h + t * len / xe;
+            float ey = ye - t;
+            float X = xe + t * (len + xe) / rise;
+            float Z = d / 2 + overhang + t;
+            var L0 = P(-X, ey, -Z); var L1 = P(-X, ey, Z); var R0 = P(X, ey, -Z); var R1 = P(X, ey, Z);
+            var T0 = P(0, ry, -Z); var T1 = P(0, ry, Z);
+            Quad(L1, T1, T0, L0, col);
+            Quad(T0, T1, R1, R0, col);
+            Tri(L0, T0, R0, col);
+            Tri(L1, R1, T1, col);
+            Quad(L0, R0, R1, L1, col);
+        }
+
+        /// <summary>Altı kapalı koni (dış hat kabuğu için): b taban merkezi.</summary>
+        public void ClosedCone(Vector3 b, float r, float h, int sides, float rotDeg, Color col)
+        {
+            Frustum(b, r, 0f, h, sides, rotDeg, col, col);
+            for (int i = 0; i < sides; i++)
+                Tri(b, Ring(b, r, rotDeg + 360f / sides * i), Ring(b, r, rotDeg + 360f / sides * (i + 1)), col);
         }
 
         public void Cylinder(Vector3 a, Vector3 b, float r, int sides, Color col)
@@ -200,8 +246,13 @@ namespace Takimada
             mesh.SetNormals(n);
             mesh.SetColors(c);
             mesh.SetUVs(0, uv);
+            mesh.SetUVs(1, an);
             mesh.SetTriangles(t, 0);
             mesh.RecalculateBounds();
+            // hareket eden parçalar (gemi, koyunlar, deniz canlıları, yükselen duman) sınır kutusundan taşmasın
+            var bb = mesh.bounds;
+            bb.SetMinMax(bb.min - new Vector3(0.8f, 1.1f, 0.8f), bb.max + new Vector3(0.8f, 1.2f, 0.8f));
+            mesh.bounds = bb;
         }
     }
 
@@ -213,8 +264,9 @@ namespace Takimada
     {
         public Camera cam;
         Light sun;
-        readonly Mesh staticMesh = new Mesh(), pieceMesh = new Mesh(), overlayMesh = new Mesh(), waterMesh = new Mesh(), labelMesh = new Mesh(), iconMesh = new Mesh();
+        readonly Mesh staticMesh = new Mesh(), pieceMesh = new Mesh(), outlineMesh = new Mesh(), overlayMesh = new Mesh(), waterMesh = new Mesh(), labelMesh = new Mesh(), iconMesh = new Mesh();
         readonly Mesh3 m = new Mesh3();
+        readonly Mesh3 ol = new Mesh3(); // taşların dış hat kabukları (UpdatePieces)
         GameObject root;
         string boardKey = "";
         Bounds bounds = new Bounds(Vector3.zero, new Vector3(10, 1, 10));
@@ -226,7 +278,7 @@ namespace Takimada
         Vector3 target = new Vector3(0, GroundY, 0);
         float dist = 18, yaw = 0, pitch = 55;
         Vector2 pivotGui;
-        const float MinDist = 4f, MaxDist = 60f, GroundY = 0.22f, DefaultPitch = 55f;
+        const float MinDist = 4f, MaxDist = 60f, GroundY = 0.22f, DefaultPitch = 55f, MinPitch = 25f, MaxPitch = 85f;
 
         static readonly Vector3 Up = Vector3.up, Down = Vector3.down;
         static Color C(string h) => Pal.Hex(h);
@@ -234,8 +286,8 @@ namespace Takimada
         // karo yükseklikleri: Volkan, Orman, Kil Ocağı, Otlak, Tarla, Dağ
         static readonly float[] Top = { 0.30f, 0.27f, 0.24f, 0.22f, 0.20f, 0.30f };
 
-        // ada renk filtresi (pastel, hafif loş) ve pul renkleri
-        const float IslandSat = 0.55f, IslandLift = 0.06f;
+        // ada renk filtresi (hafif yumuşatılmış ama canlı) ve pul renkleri
+        const float IslandSat = 0.88f, IslandLift = 0.03f;
         static readonly Color TokenTop = C("#E6D8BA"), LabelInk = C("#2B241D"), LabelRed = C("#B0473F");
         BoardData built;
         float labelYaw = float.NaN;
@@ -268,6 +320,10 @@ namespace Takimada
             Layer("Deniz", waterMesh, wmat, true, true);
             Layer("Ada", staticMesh, mat, true, true);
             Layer("Taslar", pieceMesh, mat, true, true);
+            // köy, kasaba ve yolların koyu dış hattı: biraz büyük kabuk, yalnızca arka yüzleri çizilir
+            var olMat = new Material(lit);
+            if (olMat.HasProperty("_Cull")) olMat.SetFloat("_Cull", (float)CullMode.Front);
+            Layer("Hatlar", outlineMesh, olMat, false, false);
             // pul yazıları ve liman sembolleri pulların üst yüzeyine basılır
             var iconMat = new Material(lit);
             if (iconMat.HasProperty("_MainTex")) iconMat.mainTexture = Icons.Atlas(Pal.Soft(TokenTop, IslandSat, IslandLift));
@@ -293,7 +349,7 @@ namespace Takimada
             sun = sunGo.AddComponent<Light>();
             sun.type = LightType.Directional;
             sun.color = C("#F5E9D6");
-            sun.intensity = 0.8f;
+            sun.intensity = 0.88f;
             sun.shadows = LightShadows.Soft;
             sun.shadowStrength = 0.42f;
             sun.shadowBias = 0.03f;
@@ -308,6 +364,8 @@ namespace Takimada
             Shader.SetGlobalColor("_TkSky", C("#C3D6DE") * 0.55f);
             Shader.SetGlobalColor("_TkGround", C("#9A8B78") * 0.42f);
             Shader.SetGlobalColor("_TkFogColor", Pal.Haze);
+            Shader.SetGlobalFloat("_TkWaveAmp", 1f);
+            Shader.SetGlobalFloat("_TkRipple", 1f);
             ApplyCamera();
         }
 
@@ -356,7 +414,7 @@ namespace Takimada
 
         void BuildStatic(BoardData b)
         {
-            m.Sat = IslandSat; m.Lift = IslandLift;   // ada pastel ve hafif loş
+            m.Sat = IslandSat; m.Lift = IslandLift;   // ada rengi biraz yumuşatılır
             int n = b.hexes.Count;
             hexTop = new float[n];
             hexTerrain = new Terrain[n];
@@ -395,13 +453,15 @@ namespace Takimada
             }
 
             harborAt = new Vector3[b.harbors.Count];
+            harborAnim = new Vector4[b.harbors.Count];
             for (int i = 0; i < b.harbors.Count; i++)
             {
                 var hb = b.harbors[i];
-                Harbor(b, hb, b.fog);
-                harborAt[i] = W(hb.x, hb.y, 0.125f);
+                Harbor(b, hb, i, b.fog);
+                harborAt[i] = ShipLabelPoint(b, hb);
                 fitPoints.Add(W(hb.x, hb.y, 0.1f));
             }
+            SeaLife(b);
             m.Apply(staticMesh);
             m.Sat = 1f; m.Lift = 0f;
 
@@ -583,11 +643,16 @@ namespace Takimada
         void Sheep(Vector3 g, float yaw, System.Random rnd)
         {
             var q = Quaternion.Euler(0, yaw, 0);
+            // shader koyunu bu nokta etrafında gezdirir/döndürür, başını otlamak için eğer
+            float phase = (float)rnd.NextDouble();
+            m.Anim = new Vector4(g.x, g.z, phase, Mesh3.AnimSheep);
             for (int sx = -1; sx <= 1; sx += 2)
                 for (int sz = -1; sz <= 1; sz += 2)
                     m.Cylinder(g + q * new Vector3(sx * 0.045f, 0, sz * 0.03f), g + q * new Vector3(sx * 0.045f, 0.065f, sz * 0.03f), 0.012f, 4, SheepDark);
             m.Ellipsoid(g + Up * 0.095f, new Vector3(0.095f, 0.065f, 0.065f), 7, 4, yaw, Jitter(Wool, rnd, 0.04f));
+            m.Anim.w = Mesh3.AnimSheepHead;
             m.Ellipsoid(g + q * new Vector3(0.1f, 0.11f, 0), new Vector3(0.04f, 0.035f, 0.032f), 5, 3, yaw, SheepDark);
+            m.Anim = Vector4.zero;
         }
 
         void Fence(Vector3 g, float yaw)
@@ -701,41 +766,247 @@ namespace Takimada
                     m.Quad(p0 - perp * w, p1 - perp * w, p1 + perp * w, p0 + perp * w, Glow(Lava, 0.9f - seg * 0.2f));
                 }
             }
-            var smoke = b + Up * (VolH + 0.12f);
-            m.Ellipsoid(smoke, Vector3.one * 0.08f, 7, 4, 0, C("#4E4744"));
-            m.Ellipsoid(smoke + new Vector3(0.06f, 0.15f, 0.03f), Vector3.one * 0.1f, 7, 4, 0, C("#6A625E"));
-            m.Ellipsoid(smoke + new Vector3(0.14f, 0.32f, 0.05f), Vector3.one * 0.12f, 7, 4, 0, C("#8A837F"));
+            // duman: kraterden sırayla çıkan topaklar; shader yükseltir, büyütür, rüzgârla savurur ve söndürür
+            var smoke = b + Up * (VolH + 0.03f);
+            const int Puffs = 6;
+            float ph0 = R();
+            for (int k = 0; k < Puffs; k++)
+            {
+                m.Anim = new Vector4(smoke.x, smoke.z, Mesh3.Packed(smoke.y * 1000f, ph0 + (k + R() * 0.3f) / Puffs), Mesh3.AnimSmoke);
+                m.Ellipsoid(smoke, Vector3.one * (0.075f + R() * 0.02f), 7, 4, R() * 360f, C("#4E4744"));
+            }
+            m.Anim = Vector4.zero;
         }
 
-        void Harbor(BoardData b, Harbor hb, bool fog)
+        // ===================================================================== deniz canlıları
+
+        static readonly Color DolphinBack = C("#5D7385"), DolphinBelly = C("#C7D2D8");
+        static readonly Color WhaleBack = C("#3D5263"), WhaleBelly = C("#8EA2AE"), Spray = C("#EEF6F7");
+
+        // yunus sıçrayış yayı (TakimadaLit.shader ile aynı olmalı): eksen y = DolphinAxisY, yarıçap DolphinArc
+        const float DolphinAxisY = -0.34f, DolphinArc = 0.52f;
+
+        /// <summary>Adanın açıklarına birkaç yunus sürüsü ve balina serpiştirir. Hareketi shader verir.</summary>
+        void SeaLife(BoardData b)
+        {
+            if (b.hexes.Count == 0) return;
+            int seed = b.hexes.Count * 7919 + b.harbors.Count * 131;
+            foreach (var h in b.hexes) seed = seed * 31 + (int)h.terrain + Mathf.RoundToInt(h.x * 10) * 3 + Mathf.RoundToInt(h.y * 10);
+            var rnd = new System.Random(seed);
+            float R() => (float)rnd.NextDouble();
+
+            bool big = b.hexes.Count > 24;
+            int pods = big ? 3 : 2, whales = big ? 2 : 1;
+            var taken = new List<Vector2>();
+            foreach (var hb in b.harbors) taken.Add(new Vector2(hb.x, hb.y));
+
+            // kıyıdan biraz açıkta, limanlardan ve birbirinden uzak bir nokta
+            bool Spot(float dMin, float dMax, float sep, out Vector2 p)
+            {
+                float rad = 0;
+                foreach (var h in b.hexes) rad = Mathf.Max(rad, new Vector2(h.x, h.y).magnitude);
+                for (int tries = 0; tries < 300; tries++)
+                {
+                    float a = R() * Mathf.PI * 2f, r = rad + dMin + R() * (dMax - dMin) * 1.2f;
+                    p = new Vector2(Mathf.Cos(a) * r, Mathf.Sin(a) * r);
+                    float d = float.MaxValue;
+                    foreach (var h in b.hexes) d = Mathf.Min(d, Vector2.Distance(p, new Vector2(h.x, h.y)));
+                    if (d < dMin || d > dMax) continue;
+                    bool ok = true;
+                    foreach (var q in taken) if (Vector2.Distance(p, q) < sep) { ok = false; break; }
+                    if (!ok) continue;
+                    taken.Add(p);
+                    return true;
+                }
+                p = Vector2.zero;
+                return false;
+            }
+
+            for (int i = 0; i < whales; i++)
+                if (Spot(2.6f, 3.6f, 2.4f, out var p)) Whale(W(p.x, p.y), R() * 360f, R());
+            for (int i = 0; i < pods; i++)
+            {
+                if (!Spot(2.2f, 3.2f, 2.2f, out var p)) continue;
+                float yaw = R() * 360f, ph = R();
+                var q = Quaternion.Euler(0, yaw, 0);
+                int count = 2 + (R() < 0.5f ? 1 : 0);
+                for (int k = 0; k < count; k++)
+                {
+                    var off = q * new Vector3((k - (count - 1) / 2f) * 0.2f, 0, -Mathf.Abs(k - (count - 1) / 2f) * 0.16f);
+                    Dolphin(W(p.x, p.y) + off, yaw, ph + k * 0.03f + R() * 0.01f, 0.9f + R() * 0.2f);
+                }
+            }
+            m.Anim = Vector4.zero;
+        }
+
+        /// <summary>Yunus, sıçrayışın en tepesindeki duruşuyla kurulur; shader onu yay üstünde döndürür.</summary>
+        void Dolphin(Vector3 at, float yawDeg, float phase, float s)
+        {
+            var q = Quaternion.Euler(0, yawDeg, 0);
+            var f = q * Vector3.forward; var side = q * Vector3.right;
+            var c = new Vector3(at.x, DolphinAxisY + DolphinArc, at.z);
+            m.Anim = new Vector4(at.x, at.z, Mesh3.Packed(Mathf.Repeat(yawDeg, 360f), phase), Mesh3.AnimDolphin);
+            m.Ellipsoid(c, new Vector3(0.042f, 0.038f, 0.15f) * s, 8, 5, yawDeg, DolphinBack);
+            m.Ellipsoid(c + Down * 0.012f * s + f * 0.01f * s, new Vector3(0.034f, 0.03f, 0.125f) * s, 8, 4, yawDeg, DolphinBelly);
+            m.Ellipsoid(c + (f * 0.155f + Down * 0.01f) * s, new Vector3(0.014f, 0.012f, 0.035f) * s, 5, 3, yawDeg, DolphinBack);
+            // sırt yüzgeci
+            m.Tri(c + (Up * 0.034f + f * 0.03f) * s, c + (Up * 0.078f - f * 0.045f) * s, c + (Up * 0.034f - f * 0.045f) * s, DolphinBack);
+            // yan yüzgeçler
+            for (int k = -1; k <= 1; k += 2)
+                m.Tri(c + (f * 0.06f + side * k * 0.03f + Down * 0.02f) * s, c + (f * 0.01f + side * k * 0.075f + Down * 0.04f) * s, c + (f * 0.02f + side * k * 0.03f + Down * 0.02f) * s, DolphinBack);
+            // kuyruk
+            var t0 = c - f * 0.14f * s;
+            m.Tri(t0, t0 + (-f * 0.06f + side * 0.058f) * s, t0 - f * 0.035f * s, DolphinBack);
+            m.Tri(t0, t0 - f * 0.035f * s, t0 + (-f * 0.06f - side * 0.058f) * s, DolphinBack);
+        }
+
+        // balina fıskiyesinin tabanı (TakimadaLit.shader ile aynı olmalı)
+        const float SpoutY = 0.07f;
+
+        /// <summary>Balina su yüzündeki duruşuyla kurulur (at = püskürtme deliği). Shader onu yüzdürür, daldırır.</summary>
+        void Whale(Vector3 at, float yawDeg, float phase)
+        {
+            var q = Quaternion.Euler(0, yawDeg, 0);
+            var f = q * Vector3.forward; var side = q * Vector3.right;
+            var anim = new Vector4(at.x, at.z, Mesh3.Packed(Mathf.Repeat(yawDeg, 360f), phase), Mesh3.AnimWhale);
+            m.Anim = anim;
+            var body = at - f * 0.12f + Down * 0.02f;
+            m.Ellipsoid(body, new Vector3(0.13f, 0.085f, 0.38f), 10, 6, yawDeg, WhaleBack);
+            m.Ellipsoid(body + Down * 0.03f + f * 0.04f, new Vector3(0.11f, 0.06f, 0.32f), 10, 4, yawDeg, WhaleBelly);
+            m.Ellipsoid(body - f * 0.4f + Up * 0.005f, new Vector3(0.055f, 0.045f, 0.14f), 7, 4, yawDeg, WhaleBack);
+            // yan yüzgeçler
+            for (int k = -1; k <= 1; k += 2)
+                m.Tri(body + f * 0.12f + side * k * 0.1f + Down * 0.04f, body + f * 0.0f + side * k * 0.22f + Down * 0.06f, body + f * 0.04f + side * k * 0.1f + Down * 0.04f, WhaleBack);
+            // kuyruk yüzgeci
+            var t0 = body - f * 0.52f + Up * 0.01f;
+            m.Tri(t0, t0 - f * 0.1f + side * 0.17f, t0 - f * 0.05f, WhaleBack);
+            m.Tri(t0, t0 - f * 0.05f, t0 - f * 0.1f - side * 0.17f, WhaleBack);
+            m.Tri(t0 - f * 0.05f, t0 - f * 0.1f + side * 0.17f, t0 - f * 0.13f + side * 0.1f, WhaleBack);
+            m.Tri(t0 - f * 0.05f, t0 - f * 0.13f - side * 0.1f, t0 - f * 0.1f - side * 0.17f, WhaleBack);
+            // fıskiye: shader yalnızca su yüzündeyken açar
+            anim.w = Mesh3.AnimSpout;
+            m.Anim = anim;
+            var sp = new Vector3(at.x, SpoutY, at.z);
+            var mist = Glow(Spray, 0.15f);
+            m.Ellipsoid(sp + Up * 0.05f, new Vector3(0.025f, 0.05f, 0.025f), 6, 3, 0, mist);
+            m.Ellipsoid(sp + Up * 0.15f, new Vector3(0.045f, 0.06f, 0.045f), 6, 3, 30, mist);
+            m.Ellipsoid(sp + Up * 0.24f + side * 0.05f, new Vector3(0.05f, 0.04f, 0.05f), 6, 3, 10, mist);
+            m.Ellipsoid(sp + Up * 0.24f - side * 0.05f, new Vector3(0.05f, 0.04f, 0.05f), 6, 3, 50, mist);
+            m.Anim = Vector4.zero;
+        }
+
+        // korsan gemisi ölçüleri (yerel: x yan, y yukarı, z baş yönü)
+        const float ShipL = 0.72f, ShipB = 0.32f, ShipDeck = 0.13f, ShipKeel = -0.07f, ShipLabelZ = -0.08f;
+        const float ShipScale = 1.3f; // geminin ve üstündeki etiketin büyüklüğü
+        static readonly Color Hull = C("#4A2F1C"), HullRail = C("#6B4428"), Deck = C("#D2B98F"), Cannon = C("#1A1714"), SailDark = C("#D8CFBA");
+
+        Vector4[] harborAnim = new Vector4[0];
+
+        void Harbor(BoardData b, Harbor hb, int index, bool fog)
         {
             var e = b.edges[hb.edge];
             var hp = W(hb.x, hb.y);
-            foreach (var vi in new[] { e.a, e.b })
+            var va = W(b.verts[e.a].x, b.verts[e.a].y);
+            var vb = W(b.verts[e.b].x, b.verts[e.b].y);
+            var mid = Vector3.Lerp(va, vb, 0.5f);
+            var toShore = (mid - hp); toShore.y = 0; toShore.Normalize();
+
+            // iskele: gemiden kıyıdaki iki köşeye uzanan iki tahta yol (sabit, gemiyle sallanmaz)
+            var gang = hp + toShore * (ShipB * 0.5f * ShipScale - 0.02f);
+            foreach (var vp in new[] { va, vb })
             {
-                var vp = W(b.verts[vi].x, b.verts[vi].y);
-                var d = vp - hp;
+                var d = vp - gang;
                 float yawDeg = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
-                m.Box(Vector3.Lerp(hp, vp, 0.5f) + Up * 0.07f, new Vector3(0.1f, 0.03f, d.magnitude), yawDeg, Plank, PlankTop);
-                foreach (var f in new[] { 0.35f, 0.7f })
+                m.Box(Vector3.Lerp(gang, vp, 0.5f) + Up * 0.07f, new Vector3(0.1f, 0.03f, d.magnitude), yawDeg, Plank, PlankTop);
+                foreach (var f in new[] { 0.3f, 0.65f })
                 {
-                    var pt = Vector3.Lerp(hp, vp, f);
+                    var pt = Vector3.Lerp(gang, vp, f);
                     m.Cylinder(pt + Down * 0.2f, pt + Up * 0.07f, 0.016f, 5, Post);
                 }
             }
-            for (int k = 0; k < 4; k++)
-            {
-                var pt = Mesh3.Ring(hp, 0.22f, 45 + 90 * k);
-                m.Cylinder(pt + Down * 0.25f, pt + Up * 0.03f, 0.02f, 5, Post);
-            }
-            m.Frustum(hp + Up * 0.03f, 0.3f, 0.3f, 0.06f, 8, 22.5f, PlankTop, Plank);
-            m.Frustum(hp + Up * 0.09f, 0.25f, 0.24f, 0.035f, 18, 0, TokenTop, Pal.TokenEdge);
-            var pole = hp + new Vector3(0.22f, 0.09f, 0.16f);
-            m.Cylinder(pole, pole + Up * 0.42f, 0.012f, 5, Post);
-            var ft = pole + Up * 0.4f;
-            var flag = fog || hb.type == T.GenericHarbor ? Plaster : Pal.Res[hb.type];
-            m.Quad(ft, ft + new Vector3(0.17f, -0.02f, 0.01f), ft + new Vector3(0.16f, -0.12f, 0.01f), ft + new Vector3(0, -0.11f, 0), flag);
+
+            var ax = vb - va; ax.y = 0; ax.Normalize();
+            float phase = Mathf.Repeat(hb.x * 0.37f + hb.y * 0.71f, 1f);
+            var anim = new Vector4(hp.x, hp.z, phase, Mesh3.AnimShip);
+            harborAnim[index] = anim;
+            m.Anim = anim;
+            var sail = fog || hb.type == T.GenericHarbor ? SailDark : Color.Lerp(SailDark, Pal.Res[hb.type], 0.7f);
+            PirateShip(hp, ax, sail);
+            m.Anim = Vector4.zero;
         }
+
+        /// <summary>Gövde, güverte, kıç kasarası, top delikleri, direk, şişkin yelken ve kurukafalı bayrak.</summary>
+        void PirateShip(Vector3 c, Vector3 fwd, Color sail)
+        {
+            const float K = ShipScale;
+            var side = Vector3.Cross(Up, fwd);
+            float yawDeg = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
+            // ölçüler ShipScale ile büyütülür; aşağıdaki sayılar ölçeksiz gemiye göre
+            Vector3 L(float x, float y, float z) => c + (side * x + Up * y + fwd * z) * K;
+
+            float hb = ShipB / 2, hl = ShipL / 2;
+            // güverte ve omurga dış hatları: kıç-sol, orta-sol, baş, orta-sağ, kıç-sağ
+            var top = new[] { L(-hb, ShipDeck, -hl), L(-hb, ShipDeck, ShipL * 0.12f), L(0, ShipDeck, hl + 0.05f), L(hb, ShipDeck, ShipL * 0.12f), L(hb, ShipDeck, -hl) };
+            var bot = new[] { L(-hb * 0.45f, ShipKeel, -hl * 0.85f), L(-hb * 0.45f, ShipKeel, ShipL * 0.08f), L(0, ShipKeel, hl * 0.8f), L(hb * 0.45f, ShipKeel, ShipL * 0.08f), L(hb * 0.45f, ShipKeel, -hl * 0.85f) };
+            for (int i = 0; i < top.Length; i++)
+            {
+                int j = (i + 1) % top.Length;
+                m.Quad(top[i], top[j], bot[j], bot[i], Hull);
+            }
+            var deckC = L(0, ShipDeck, 0);
+            for (int i = 0; i < top.Length; i++) m.Tri(deckC, top[(i + 1) % top.Length], top[i], Deck);
+            // küpeşte
+            for (int i = 0; i < top.Length; i++)
+            {
+                int j = (i + 1) % top.Length;
+                m.Cylinder(top[i] + Up * 0.02f * K, top[j] + Up * 0.02f * K, 0.012f * K, 4, HullRail);
+            }
+            // gövdede açık renk şerit ve top delikleri
+            for (int s = -1; s <= 1; s += 2)
+            {
+                m.Box(L(s * (hb + 0.002f), ShipDeck - 0.05f, -0.02f), new Vector3(0.006f, 0.02f, ShipL * 0.7f) * K, yawDeg, HullRail);
+                for (int k = -1; k <= 1; k++)
+                    m.Box(L(s * (hb + 0.004f), ShipDeck - 0.045f, k * 0.14f - 0.02f), new Vector3(0.012f, 0.03f, 0.04f) * K, yawDeg, Cannon);
+            }
+            // kıç kasarası
+            m.Box(L(0, ShipDeck, -hl + 0.07f), new Vector3(ShipB, 0.07f, 0.14f) * K, yawDeg, Hull, HullRail);
+            // cıvadra
+            m.Cylinder(L(0, ShipDeck + 0.02f, hl + 0.03f), L(0, ShipDeck + 0.09f, hl + 0.2f), 0.01f * K, 4, Post);
+
+            // direk, seren ve yelken (etiketleri kapatmasın diye başa yakın ve yüksekte)
+            float mz = 0.24f, y0 = ShipDeck + 0.26f, y1 = ShipDeck + 0.46f, sw = 0.17f;
+            m.Cylinder(L(0, ShipDeck, mz), L(0, ShipDeck + 0.58f, mz), 0.014f * K, 5, Post);
+            m.Cylinder(L(-sw - 0.02f, y1, mz + 0.01f), L(sw + 0.02f, y1, mz + 0.01f), 0.008f * K, 4, Post);
+            m.Cylinder(L(-sw - 0.02f, y0, mz + 0.01f), L(sw + 0.02f, y0, mz + 0.01f), 0.008f * K, 4, Post);
+            const float Belly = 0.05f;
+            float ym = (y0 + y1) / 2;
+            var a0 = L(-sw, y1, mz + 0.015f); var a1 = L(sw, y1, mz + 0.015f);
+            var b0 = L(-sw * 0.95f, ym, mz + 0.015f + Belly); var b1 = L(sw * 0.95f, ym, mz + 0.015f + Belly);
+            var c0 = L(-sw, y0, mz + 0.015f); var c1 = L(sw, y0, mz + 0.015f);
+            m.Quad(a0, a1, b1, b0, sail);
+            m.Quad(b0, b1, c1, c0, Darker(sail, 0.92f));
+            // kurukafalı bayrak
+            var ft = L(0, ShipDeck + 0.58f, mz);
+            var f1 = ft + (-fwd * 0.17f + Up * 0.01f) * K;
+            var f2 = ft + (-fwd * 0.16f - Up * 0.1f) * K;
+            var f3 = ft - Up * 0.1f * K;
+            m.Quad(ft, f1, f2, f3, FlagBlack);
+            var skull = Vector3.Lerp(ft, f2, 0.5f);
+            m.Ellipsoid(skull + side * 0.004f * K, new Vector3(0.004f, 0.022f, 0.022f) * K, 6, 3, yawDeg, Bone);
+            m.Ellipsoid(skull - side * 0.004f * K, new Vector3(0.004f, 0.022f, 0.022f) * K, 6, 3, yawDeg, Bone);
+        }
+
+        /// <summary>Liman etiketinin basılacağı güverte noktası.</summary>
+        static Vector3 ShipLabelPoint(BoardData b, Harbor hb)
+        {
+            var e = b.edges[hb.edge];
+            var ax = W(b.verts[e.b].x, b.verts[e.b].y) - W(b.verts[e.a].x, b.verts[e.a].y);
+            ax.y = 0; ax.Normalize();
+            return W(hb.x, hb.y, ShipDeck * ShipScale + 0.002f) + ax * ShipLabelZ * ShipScale;
+        }
+
+        // su köşe rengi alfası: kıyıya uzaklık / ShoreRange (TakimadaWater.shader ile aynı olmalı)
+        const float ShoreRange = 3f;
 
         void BuildWater(BoardData b)
         {
@@ -764,7 +1035,9 @@ namespace Takimada
                     if (d < 0.36f) col0 = Color.Lerp(foam, col0, Mathf.InverseLerp(0.16f, 0.36f, d));
                     int idx = j * row + i;
                     verts[idx] = new Vector3(x, 0, z);
-                    cols[idx] = Pal.Soft(col0, 0.6f, 0.05f);
+                    var wc = Pal.Soft(col0, 0.92f, 0.02f);
+                    wc.a = Mathf.Clamp01(d / ShoreRange); // kıyıya uzaklık: shader dalgaları bununla çizer
+                    cols[idx] = wc;
                     norms[idx] = Vector3.up;
                 }
             var tris = new int[cells * cells * 6];
@@ -888,17 +1161,21 @@ namespace Takimada
             {
                 var hb = b.harbors[i];
                 var top = harborAt[i] + Vector3.up * Raise;
-                if (b.fog) { FlatText("?", top, right, fwd, 0.15f, LabelInk); continue; }
-                if (hb.type == T.GenericHarbor) { FlatText(GenericRatio + ":1", top, right, fwd, 0.12f, LabelInk); continue; }
-                FlatText(SpecificRatio + ":1", top + fwd * -0.115f, right, fwd, 0.085f, LabelInk);
+                // etiket güverteye basılı: gemiyle aynı şekilde sallanır
+                var anim = i < harborAnim.Length ? harborAnim[i] : Vector4.zero;
+                m.Anim = anim; icons.Anim = anim;
+                if (b.fog) { FlatText("?", top, right, fwd, 0.21f, LabelInk); continue; }
+                if (hb.type == T.GenericHarbor) { FlatText(GenericRatio + ":1", top, right, fwd, 0.17f, LabelInk); continue; }
+                FlatText(SpecificRatio + ":1", top + fwd * -0.16f, right, fwd, 0.12f, LabelInk);
                 // sembol: atlastaki kendi bölümü, pulun üstünde kare
-                var ic = top + fwd * 0.055f;
-                float s = 0.085f, u0 = hb.type / (float)T.ResCount, u1 = (hb.type + 1) / (float)T.ResCount;
+                var ic = top + fwd * 0.075f;
+                float s = 0.12f, u0 = hb.type / (float)T.ResCount, u1 = (hb.type + 1) / (float)T.ResCount;
                 var bl = ic - right * s - fwd * s; var br = ic + right * s - fwd * s;
                 var tr = ic + right * s + fwd * s; var tl = ic - right * s + fwd * s;
                 icons.TriUV(bl, tl, tr, new Vector2(u0, 0), new Vector2(u0, 1), new Vector2(u1, 1), Color.white);
                 icons.TriUV(bl, tr, br, new Vector2(u0, 0), new Vector2(u1, 1), new Vector2(u1, 0), Color.white);
             }
+            m.Anim = Vector4.zero;
             m.Apply(labelMesh);
             m.Sat = 1f; m.Lift = 0f;
             icons.Apply(iconMesh);
@@ -934,34 +1211,60 @@ namespace Takimada
 
         static Color Glow(Color c, float amount) { c.a = 1f - Mathf.Clamp01(amount); return c; }
 
-        void Road(Vector3 a, Vector3 b, float y, Color col)
+        // taş boyutları ve dış hat kalınlığı
+        const float HouseK = 1.3f, CityK = 1.25f, RoadW = 0.15f, RoadH = 0.09f, RoadLen = 0.72f, Edge = 0.013f;
+        static readonly Color EdgeInk = C("#15110D");
+
+        /// <summary>outline: true ise dış hat kabukları ol'a yazılır (yalnızca gerçek taşlar; hayaletler değil).</summary>
+        void Road(Vector3 a, Vector3 b, float y, Color col, bool outline = false)
         {
             var d = b - a;
             float yawDeg = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
-            m.Box(Vector3.Lerp(a, b, 0.5f) + Up * (y - 0.005f), new Vector3(0.11f, 0.075f, d.magnitude * 0.7f), yawDeg, Darker(col, 0.85f), col);
+            var c = Vector3.Lerp(a, b, 0.5f) + Up * (y - 0.005f);
+            var size = new Vector3(RoadW, RoadH, d.magnitude * RoadLen);
+            m.Box(c, size, yawDeg, Darker(col, 0.85f), col);
+            if (outline) ol.Box(c + Down * Edge, size + Vector3.one * (2 * Edge), yawDeg, EdgeInk);
         }
 
-        void House(Vector3 p, float yawDeg, Color wall, Color roof, bool foundation = true)
+        void OBox(Vector3 b, Vector3 size, float yaw) => ol.Box(b + Down * Edge, size + Vector3.one * (2 * Edge), yaw, EdgeInk);
+
+        void House(Vector3 p, float yawDeg, Color wall, Color roof, bool foundation = true, bool outline = false)
         {
+            const float K = HouseK;
             var q = Quaternion.Euler(0, yawDeg, 0);
-            if (foundation) m.Prism(p + Down * 0.04f, 0.15f, 0.05f, 6, 30, Stone, StoneDark);
+            if (foundation) m.Prism(p + Down * 0.04f, 0.15f * K, 0.05f, 6, 30, Stone, StoneDark);
             p += Up * 0.01f;
-            m.Box(p, new Vector3(0.2f, 0.12f, 0.16f), yawDeg, wall);
-            m.Roof(p + Up * 0.12f, 0.2f, 0.16f, 0.1f, yawDeg, roof, wall, 0.025f);
-            m.Box(p + q * new Vector3(0.05f, 0.14f, 0.03f), new Vector3(0.035f, 0.07f, 0.035f), yawDeg, roof);
+            var body = new Vector3(0.2f, 0.12f, 0.16f) * K;
+            var chim = p + q * new Vector3(0.05f, 0.14f, 0.03f) * K;
+            var chimSize = new Vector3(0.035f, 0.07f, 0.035f) * K;
+            m.Box(p, body, yawDeg, wall);
+            m.Roof(p + Up * body.y, body.x, body.z, 0.1f * K, yawDeg, roof, wall, 0.025f * K);
+            m.Box(chim, chimSize, yawDeg, roof);
+            if (!outline) return;
+            OBox(p, body, yawDeg);
+            ol.RoofShell(p + Up * body.y, body.x, body.z, 0.1f * K, yawDeg, 0.025f * K, Edge, EdgeInk);
+            OBox(chim, chimSize, yawDeg);
         }
 
-        void City(Vector3 p, float yawDeg, Color wall, Color roof, bool foundation = true)
+        void City(Vector3 p, float yawDeg, Color wall, Color roof, bool foundation = true, bool outline = false)
         {
+            const float K = CityK;
             var q = Quaternion.Euler(0, yawDeg, 0);
-            if (foundation) m.Prism(p + Down * 0.04f, 0.22f, 0.05f, 6, 30, Stone, StoneDark);
+            if (foundation) m.Prism(p + Down * 0.04f, 0.22f * K, 0.05f, 6, 30, Stone, StoneDark);
             p += Up * 0.01f;
-            var hall = p + q * new Vector3(0.05f, 0, 0);
-            m.Box(hall, new Vector3(0.24f, 0.14f, 0.2f), yawDeg, wall);
-            m.Roof(hall + Up * 0.14f, 0.24f, 0.2f, 0.1f, yawDeg, roof, wall, 0.025f);
-            var tower = p + q * new Vector3(-0.1f, 0, 0);
-            m.Box(tower, new Vector3(0.12f, 0.3f, 0.12f), yawDeg, wall);
-            m.Frustum(tower + Up * 0.3f, 0.1f, 0f, 0.13f, 4, 45 - yawDeg, roof, roof);
+            var hall = p + q * new Vector3(0.05f, 0, 0) * K;
+            var hallSize = new Vector3(0.24f, 0.14f, 0.2f) * K;
+            m.Box(hall, hallSize, yawDeg, wall);
+            m.Roof(hall + Up * hallSize.y, hallSize.x, hallSize.z, 0.1f * K, yawDeg, roof, wall, 0.025f * K);
+            var tower = p + q * new Vector3(-0.1f, 0, 0) * K;
+            var towerSize = new Vector3(0.12f, 0.3f, 0.12f) * K;
+            m.Box(tower, towerSize, yawDeg, wall);
+            m.Frustum(tower + Up * towerSize.y, 0.1f * K, 0f, 0.13f * K, 4, 45 - yawDeg, roof, roof);
+            if (!outline) return;
+            OBox(hall, hallSize, yawDeg);
+            ol.RoofShell(hall + Up * hallSize.y, hallSize.x, hallSize.z, 0.1f * K, yawDeg, 0.025f * K, Edge, EdgeInk);
+            OBox(tower, towerSize, yawDeg);
+            ol.ClosedCone(tower + Up * (towerSize.y - Edge), 0.1f * K + Edge * 1.5f, 0.13f * K + Edge * 2.6f, 4, 45 - yawDeg, EdgeInk);
         }
 
         void Robber(Vector3 p)
@@ -983,13 +1286,14 @@ namespace Takimada
         {
             m.Clear();
             var b = s.board;
-            if (!Matches(b)) { m.Apply(pieceMesh); return; }
+            ol.Clear();
+            if (!Matches(b)) { m.Apply(pieceMesh); ol.Apply(outlineMesh); return; }
             for (int e = 0; e < s.eOwner.Length; e++)
             {
                 int o = s.eOwner[e];
                 if (o < 0) continue;
                 var ed = b.edges[e];
-                Road(W(b.verts[ed.a].x, b.verts[ed.a].y), W(b.verts[ed.b].x, b.verts[ed.b].y), EdgeTop(b, e), Pal.PlayerColor(s.players[o].color));
+                Road(W(b.verts[ed.a].x, b.verts[ed.a].y), W(b.verts[ed.b].x, b.verts[ed.b].y), EdgeTop(b, e), Pal.PlayerColor(s.players[o].color), true);
             }
             for (int v = 0; v < s.vOwner.Length; v++)
             {
@@ -997,8 +1301,8 @@ namespace Takimada
                 if (o < 0) continue;
                 var p = W(b.verts[v].x, b.verts[v].y, VertTop(b, v));
                 var col = Pal.PlayerColor(s.players[o].color);
-                if (s.vLevel[v] == 2) City(p, PieceYaw(v), col, Darker(col, 0.62f));
-                else House(p, PieceYaw(v), col, Darker(col, 0.62f));
+                if (s.vLevel[v] == 2) City(p, PieceYaw(v), col, Darker(col, 0.62f), true, true);
+                else House(p, PieceYaw(v), col, Darker(col, 0.62f), true, true);
             }
             if (s.robber >= 0 && s.robber < b.hexes.Count)
             {
@@ -1008,6 +1312,7 @@ namespace Takimada
                 Robber(W(h.x + off.x, h.y + off.y, y));
             }
             m.Apply(pieceMesh);
+            ol.Apply(outlineMesh);
         }
 
         // ===================================================================== vurgular
@@ -1083,7 +1388,7 @@ namespace Takimada
         void ApplyCamera()
         {
             if (cam == null) return;
-            pitch = Mathf.Clamp(pitch, 25f, 85f);
+            pitch = Mathf.Clamp(pitch, MinPitch, MaxPitch);
             dist = Mathf.Clamp(dist, MinDist, MaxDist);
             var rot = Quaternion.Euler(pitch, yaw, 0f);
             cam.transform.rotation = rot;
@@ -1113,6 +1418,7 @@ namespace Takimada
         public void Zoom(float factor, Vector2 gui)
         {
             if (cam == null) return;
+            orbitPivotValid = false;
             var before = GroundHit(gui);
             dist = Mathf.Clamp(dist * factor, MinDist, MaxDist);
             ApplyCamera();
@@ -1125,6 +1431,7 @@ namespace Takimada
         public void PanDrag(Vector2 fromGui, Vector2 toGui)
         {
             if (cam == null) return;
+            orbitPivotValid = false;
             var a = GroundHit(fromGui);
             var b = GroundHit(toGui);
             target += new Vector3(a.x - b.x, 0, a.z - b.z);
@@ -1132,21 +1439,63 @@ namespace Takimada
             ApplyCamera();
         }
 
-        /// <summary>Görünür alanın ortasındaki noktanın etrafında döner; o nokta ekranda yerinde kalır.</summary>
+        // Yörünge (sağ tık / Q-E): girdi birikir, TickCamera her karede yumuşakça uygular.
+        float orbitYawLeft, orbitPitchLeft;
+        Vector3 orbitPivot;
+        bool orbitPivotValid;
+        const float OrbitSmoothing = 20f; // büyüdükçe kamera girdiye daha çabuk yetişir
+
+        /// <summary>Görünür alanın ortasındaki noktanın etrafında döner/eğer; o nokta ekranda yerinde kalır.</summary>
         public void Orbit(float dYaw, float dPitch)
         {
             if (cam == null) return;
-            var pivot = GroundHit(pivotGui == Vector2.zero ? new Vector2(Screen.width / 2f, Screen.height / 2f) : pivotGui);
-            var off = target - pivot;
-            off.y = 0;
-            target = pivot + Quaternion.Euler(0, dYaw, 0) * off;
-            target.y = GroundY;
+            orbitYawLeft += dYaw;
+            // sınırdayken eğme birikip sonradan "geri tepmesin"
+            orbitPitchLeft = Mathf.Clamp(pitch + orbitPitchLeft + dPitch, MinPitch, MaxPitch) - pitch;
+        }
+
+        public void TickCamera(float dt)
+        {
+            if (cam == null) return;
+            if (orbitYawLeft == 0 && orbitPitchLeft == 0) { orbitPivotValid = false; return; }
+            if (!orbitPivotValid)
+            {
+                orbitPivot = GroundHit(pivotGui == Vector2.zero ? new Vector2(Screen.width / 2f, Screen.height / 2f) : pivotGui);
+                orbitPivotValid = true;
+            }
+            bool settle = Mathf.Abs(orbitYawLeft) < 0.02f && Mathf.Abs(orbitPitchLeft) < 0.02f;
+            float k = settle ? 1f : 1f - Mathf.Exp(-OrbitSmoothing * dt);
+            float dy = orbitYawLeft * k, dp = orbitPitchLeft * k;
+            orbitYawLeft -= dy; orbitPitchLeft -= dp;
+            if (settle) { orbitYawLeft = 0; orbitPitchLeft = 0; }
+            RotateAbout(orbitPivot, dy, dp);
+        }
+
+        /// <summary>Kamerayı yer düzlemindeki bir noktanın etrafında katı biçimde döndürür (yatay + eğim).</summary>
+        void RotateAbout(Vector3 pivot, float dYaw, float dPitch)
+        {
+            float newPitch = Mathf.Clamp(pitch + dPitch, MinPitch, MaxPitch);
+            dPitch = newPitch - pitch;
+            var rot = Quaternion.Euler(pitch, yaw, 0f);
+            var camPos = target - rot * Vector3.forward * dist;
+            var q = Quaternion.AngleAxis(dYaw, Vector3.up) * Quaternion.AngleAxis(dPitch, rot * Vector3.right);
+            camPos = pivot + q * (camPos - pivot);
             yaw += dYaw;
-            pitch += dPitch;
+            pitch = newPitch;
+            var fwd = Quaternion.Euler(pitch, yaw, 0f) * Vector3.forward;
+            float t = (GroundY - camPos.y) / fwd.y;
+            if (t > 0)
+            {
+                target = camPos + fwd * t;
+                target.y = GroundY;
+                dist = t;
+            }
             ApplyCamera();
         }
 
-        public void ResetAngles() { yaw = 0; pitch = DefaultPitch; }
+        void CancelOrbit() { orbitYawLeft = 0; orbitPitchLeft = 0; orbitPivotValid = false; }
+
+        public void ResetAngles() { CancelOrbit(); yaw = 0; pitch = DefaultPitch; }
 
         public Vector2 MouseWorld(Vector2 guiPixel)
         {
@@ -1194,6 +1543,7 @@ namespace Takimada
             if (y1 - y0 < 150) { y0 = 0; y1 = Screen.height; }
             var want = new Vector2((x0 + x1) / 2f, (y0 + y1) / 2f);
             pivotGui = want;
+            CancelOrbit();
             target = new Vector3(bounds.center.x, GroundY, bounds.center.z);
             for (int it = 0; it < 8; it++)
             {

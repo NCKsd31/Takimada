@@ -42,6 +42,7 @@ namespace Takimada
 
         public void Tick()
         {
+            Board.TickCamera(Time.unscaledDeltaTime);
             var hc = app.state != null ? app.state.cfg : app.lobby.cfg;
             if (hc != null) Board.SetHarborRatios(hc.genericHarborRatio, hc.specificHarborRatio);
             if (app.view != View.Game) { TickPreview(); Board.UpdateOverlay(null, BoardView.PickKind.None, null, -1, Color.white, 0); return; }
@@ -57,7 +58,9 @@ namespace Takimada
 
         public void OnState(GameState prev, GameState s)
         {
-            if (prev == null) { build = BuildMode.None; cameraFitted = false; ResetDialogs(); }
+            stateAt = Time.realtimeSinceStartup;
+            if (prev == null) { build = BuildMode.None; cameraFitted = false; ResetDialogs(); flies.Clear(); }
+            else SpawnFlies(prev, s);
             if (prev != null && s.rolled && (!prev.rolled || prev.turn != s.turn)) flash = 1f;
             if (prev != null && prev.current != s.current && s.phase == Phase.Roll && app.Me == s.current && !app.isLocal)
                 Toast("Sıra sende!");
@@ -162,7 +165,8 @@ namespace Takimada
         {
             Sty.Init();
             var e = Event.current;
-            scale = Mathf.Clamp(Screen.height / 860f, 0.6f, 3f);
+            // yükseklik 860 birim; dar ekranda paneller taşmasın diye genişlik de en az 1360 birim olsun
+            scale = Mathf.Clamp(Mathf.Min(Screen.height / 860f, Screen.width / 1360f), 0.5f, 3f);
             sw = Screen.width / scale;
             sh = Screen.height / scale;
 
@@ -172,13 +176,25 @@ namespace Takimada
 
             GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(scale, scale, 1));
             blockers.Clear();
+            pendingText.Clear();
+            frames.Clear();
+            // ayarlar açıkken arkadaki arayüz tıklanmasın (çizim aynı kalır, yalnızca girdi kapanır)
+            bool shield = settingsOpen && e.type != EventType.Repaint;
+            bool wasEnabled = GUI.enabled;
+            if (shield) GUI.enabled = false;
             switch (app.view)
             {
-                case View.Menu: DrawMenu(); break;
-                case View.Lobby: DrawLobby(); break;
+                case View.Menu: DrawMenu(); GearButton(new Rect(sw - 58, 16, 42, 42)); break;
+                case View.Lobby: DrawLobby(); GearButton(new Rect(16 + 320 - 16 - 34, 16 + 12, 34, 34)); break;
                 case View.Game: DrawGame(); break;
             }
+            GUI.enabled = wasEnabled;
+            FlushText();
+            if (app.view == View.Game && e.type == EventType.Repaint) DrawFlies();
             DrawToasts();
+            FlushText();
+            if (settingsOpen) DrawSettings();
+            FlushText();
             lastBlockers = new List<Rect>(blockers);
             GUI.matrix = Matrix4x4.identity;
         }
@@ -207,16 +223,23 @@ namespace Takimada
                     break;
                 case EventType.MouseDown:
                     if (over) return;
+                    GUIUtility.keyboardControl = 0; // tahtaya tıklayınca yazı alanından (sohbet) çık
                     mouseDown = true; dragging = false; downPos = e.mousePosition; dragButton = e.button;
                     e.Use();
                     break;
                 case EventType.MouseDrag:
                     if (!mouseDown) return;
-                    if ((e.mousePosition - downPos).magnitude > 6) dragging = true;
+                    var prev = e.mousePosition - e.delta;
+                    if (!dragging && (e.mousePosition - downPos).magnitude > 6)
+                    {
+                        dragging = true;
+                        prev = downPos; // eşik içinde kalan hareket kaybolmasın, sürükleme "takılmasın"
+                    }
                     if (dragging)
                     {
-                        if (dragButton == 1) Board.Orbit(e.delta.x * 0.3f, e.delta.y * 0.2f);
-                        else Board.PanDrag(e.mousePosition - e.delta, e.mousePosition);
+                        var d = e.mousePosition - prev;
+                        if (dragButton == 1) Board.Orbit(d.x * 0.3f, d.y * 0.2f);
+                        else Board.PanDrag(prev, e.mousePosition);
                     }
                     e.Use();
                     break;
@@ -241,7 +264,7 @@ namespace Takimada
 
         // ---------------- karo sayıları ve liman etiketleri ----------------
 
-        // Pul sayıları, noktalar ve liman oranları artık tahtanın üstüne 3B olarak basılıyor (BoardView.BuildLabels).
+        // Pul sayıları, noktalar ve liman oranları tahtanın üstüne 3B olarak çizilir (BoardView.BuildLabels).
         // Burada yalnızca harita henüz gizliyken gösterilen başlık çizilir.
         void DrawBoardLabels(BoardData b)
         {
@@ -263,7 +286,7 @@ namespace Takimada
             var size = Sty.label.CalcSize(new GUIContent(msg));
             var r = new Rect(cx - size.x / 2 - 14, Mathf.Max(8, top - avg * 1.3f - size.y), size.x + 28, size.y + 10);
             Sty.Fill(r, new Color(0.04f, 0.1f, 0.13f, 0.85f));
-            GUI.Label(r, msg, Sty.center);
+            GUI.Label(r, msg, Sty.center); // ekran pikseliyle çizilir (matris yok)
         }
 
         // ---------------- bildirimler ----------------
@@ -280,7 +303,7 @@ namespace Takimada
                 var r = new Rect((sw - w) / 2, y - 40, w, 36);
                 Sty.Fill(r, t.err ? new Color(0.35f, 0.08f, 0.06f, 0.95f) : new Color(0.06f, 0.16f, 0.2f, 0.95f));
                 Sty.Frame(r, t.err ? Sty.Danger : Sty.Brass, 1);
-                GUI.Label(r, t.text, Sty.center);
+                Label(r, t.text, Sty.center);
                 y -= 42;
             }
         }
@@ -291,7 +314,7 @@ namespace Takimada
         {
             bool old = GUI.enabled;
             GUI.enabled = old && enabled;
-            bool clicked = GUI.Button(r, text, style ?? Sty.btn);
+            bool clicked = Button(r, text, style ?? Sty.btn);
             GUI.enabled = old;
             return clicked;
         }
@@ -300,24 +323,32 @@ namespace Takimada
         {
             bool old = GUI.enabled;
             GUI.enabled = old && enabled;
-            bool clicked = GUILayout.Button(text, style ?? Sty.btn, opts);
+            bool clicked = LButton(text, style ?? Sty.btn, opts);
             GUI.enabled = old;
             return clicked;
         }
 
-        void Panel(Rect r) => GUI.Box(Block(r), GUIContent.none, Sty.panel);
+        void Panel(Rect r)
+        {
+            FlushText(); // önceki panellerin yazıları bu panelin altında kalsın
+            GUI.Box(Block(r), GUIContent.none, Sty.panel);
+        }
 
         void ResChip(Rect r, int res, int count, bool dimmed = false)
         {
+            // solda kaynağın resmi, sağda adet
             var c = Pal.Res[res];
             if (dimmed) c = Color.Lerp(c, Sty.Panel2, 0.6f);
-            Sty.Fill(r, Pal.Ink);
-            Sty.Fill(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), c);
-            var dark = Sty.Colored(Sty.small, Pal.Ink);
-            dark.alignment = TextAnchor.UpperCenter;
-            GUI.Label(new Rect(r.x, r.y + 3, r.width, 16), T.Res[res], dark);
-            var big = Sty.Colored(Sty.centerBig, Pal.Ink);
-            GUI.Label(new Rect(r.x, r.y + 14, r.width, r.height - 14), count.ToString(), big);
+            var old = GUI.color;
+            GUI.color = Pal.Ink;
+            GUI.DrawTexture(r, Icons.Card());
+            GUI.color = c;
+            GUI.DrawTexture(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), Icons.Card());
+            GUI.color = dimmed ? new Color(1, 1, 1, 0.5f) : old;
+            float ic = r.height - 12;
+            GUI.DrawTexture(new Rect(r.x + 6, r.y + 6, ic, ic), Icons.Glyph(res), ScaleMode.ScaleToFit, true);
+            GUI.color = old;
+            Label(new Rect(r.x + 6 + ic, r.y, r.width - ic - 8, r.height), count.ToString(), Sty.Colored(Sty.centerBig, Pal.Ink));
         }
     }
 }

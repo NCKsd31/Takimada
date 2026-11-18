@@ -4,5 +4,8 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Takimada/Scenes/Main.unity
+    guid: 65d26106f67d17347b7e039c02e15a7b
   m_configObjects: {}

@@ -4,7 +4,7 @@ Altıgen adalarda köy kurup ticaret yaptığın, 2-8 kişilik online bir strate
 
 ## 1. Projeyi aç
 
-1. Unity Hub → **Add → Add project from disk** → `C:\Users\nihat\UnityProjects\Takimada`
+1. Unity Hub → **Add → Add project from disk** → proje klasörü (`Takimada`)
 2. Editör sürümü: **6000.6.6f1**. İlk açılışta paketler indirilir (internet gerekir).
 3. Açılınca `Assets/Takimada/Scenes/Main.unity` otomatik oluşturulur ve build listesine eklenir.
 4. Play'e bas. Sahnede bir şey olmasına gerek yok, oyun kendini kurar.

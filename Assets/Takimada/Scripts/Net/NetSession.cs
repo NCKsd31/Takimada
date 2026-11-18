@@ -44,12 +44,14 @@ namespace Takimada
         public bool IsServer => nm != null && nm.IsServer;
         public bool IsRunning => nm != null && (nm.IsServer || nm.IsClient);
 
-        public void Init(Transform parent)
+        public void Init()
         {
             if (nm != null) return;
+            // NetworkManager kök nesne olmak zorunda: başka bir nesnenin altına konursa NGO
+            // "nested NetworkManager" hatası verip StartHost/StartClient'ı yarıda keser.
             var go = new GameObject("NetworkManager");
             go.SetActive(false);
-            go.transform.SetParent(parent);
+            UnityEngine.Object.DontDestroyOnLoad(go);
             utp = go.AddComponent<UnityTransport>();
             nm = go.AddComponent<NetworkManager>();
             nm.NetworkConfig = new NetworkConfig

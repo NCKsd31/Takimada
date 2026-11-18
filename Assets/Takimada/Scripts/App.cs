@@ -29,6 +29,7 @@ namespace Takimada
     [Serializable] class HelloMsg { public string name; public int protocol; }
     [Serializable] class SeatMsg { public int seat; }
     [Serializable] class TextMsg { public string text; }
+    [Serializable] public class ChatLine { public string name; public int color; public string text; }
 
     /// <summary>
     /// Uygulamanın beyni: menü/lobi/oyun akışı, sunucu tarafı oda yönetimi ve hamlelerin yönlendirilmesi.
@@ -36,7 +37,7 @@ namespace Takimada
     /// </summary>
     public class App : MonoBehaviour
     {
-        public const int Protocol = 2;
+        public const int Protocol = 4;
         public static App I;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -62,9 +63,13 @@ namespace Takimada
         public LobbyInfo lobby = new LobbyInfo();
         public int mySeatId = -1;
         public GameState state;
+        public readonly List<ChatLine> chat = new List<ChatLine>();
+        public int chatVersion; // her yeni mesajda artar (HUD kaydırmayı buna göre yapar)
 
         public NetSession net;
         public BoardView board;
+        public Settings settings;
+        AudioSource music;
         Hud hud;
 
         // --- yalnız sunucu ---
@@ -78,7 +83,13 @@ namespace Takimada
         {
             I = this;
             Application.runInBackground = true;
-            Application.targetFrameRate = 60;
+            // FPS sınırı ekranın yenileme hızı (144 Hz ekranda 144); bilinemezse 144.
+            // VSync açıksa (ayarlardan) build'de zaten yenileme hızına kilitlenir, bu değer editörde ve VSync kapalıyken işler.
+            double hz = Screen.currentResolution.refreshRateRatio.value;
+            Application.targetFrameRate = hz >= 30 ? Mathf.RoundToInt((float)hz) : 144;
+            settings = Settings.Load();
+            if (settings.hasDisplay) settings.ApplyDisplay();
+            else { settings.ApplyVsync(); FixResolution(); }
             playerName = PlayerPrefs.GetString("tk.name", "Kaptan" + UnityEngine.Random.Range(10, 99));
             ip = PlayerPrefs.GetString("tk.ip", "127.0.0.1");
             port = PlayerPrefs.GetString("tk.port", "7777");
@@ -89,8 +100,19 @@ namespace Takimada
             board.SetVisible(false);
             hud = new Hud(this);
 
+            // arka plan müziği (Resources/Music), döngüde
+            music = gameObject.AddComponent<AudioSource>();
+            music.clip = Resources.Load<AudioClip>("Music/PastoralStrategy");
+            music.loop = true;
+            music.playOnAwake = false;
+            music.spatialBlend = 0f;
+            music.priority = 0;
+            ApplySettings();
+            if (music.clip != null) music.Play();
+            else Debug.LogWarning("Satan: Resources/Music/PastoralStrategy bulunamadı, müzik çalmayacak.");
+
             net = new NetSession();
-            net.Init(transform);
+            net.Init();
             net.ServerStarted += OnServerStarted;
             net.ConnectedToServer += OnConnectedToServer;
             net.Disconnected += OnDisconnected;
@@ -98,8 +120,54 @@ namespace Takimada
             net.Message += OnMessage;
         }
 
+        /// <summary>Ses ve parlaklığı uygular (ayarlar sürgüleri her değişimde çağırır).</summary>
+        public void ApplySettings()
+        {
+            settings.ApplyAudio(music);
+            settings.ApplyBrightness(board?.cam);
+        }
+
+        /// <summary>F11 ya da Alt+Enter: pencere ↔ kenarlıksız tam ekran (ekranın kendi çözünürlüğü).</summary>
+        void ToggleFullscreen()
+        {
+            if (Application.isEditor) return;
+            bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            bool enter = Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
+            if (!Input.GetKeyDown(KeyCode.F11) && !(alt && enter)) return;
+            var r = Screen.currentResolution;
+            settings.hasDisplay = true;
+            if (Screen.fullScreenMode == FullScreenMode.Windowed)
+            {
+                settings.mode = WindowMode.Borderless;
+                settings.width = r.width; settings.height = r.height;
+            }
+            else
+            {
+                settings.mode = WindowMode.Windowed;
+                settings.width = Mathf.Min(1600, r.width * 4 / 5); settings.height = Mathf.Min(900, r.height * 4 / 5);
+            }
+            settings.ApplyDisplay();
+            settings.Save();
+        }
+
+        /// <summary>
+        /// Tam ekran ekranın kendi çözünürlüğünden düşük açılırsa görüntü büyütülüp bulanıklaşır.
+        /// Öyleyse ekranın kendi çözünürlüğüne geç.
+        /// </summary>
+        static void FixResolution()
+        {
+            if (Application.isEditor || Screen.fullScreenMode == FullScreenMode.Windowed) return;
+            var r = Screen.currentResolution;
+            if (r.width > 0 && (Screen.width != r.width || Screen.height != r.height))
+                Screen.SetResolution(r.width, r.height, FullScreenMode.FullScreenWindow);
+        }
+
         void Update()
         {
+            if (hud == null) return; // Play açıkken script derlendi; Play'i durdurup yeniden başlat
+            ToggleFullscreen();
+            // süre dolduysa motor sıradaki hamleyi kendisi yapar (yalnızca sunucuda)
+            if (isHost && engine != null && engine.Tick()) BroadcastState();
             if (isHost && !isLocal && lobbyDirty)
             {
                 lobbySendTimer -= Time.unscaledDeltaTime;
@@ -108,7 +176,7 @@ namespace Takimada
             hud.Tick();
         }
 
-        void OnGUI() => hud.Draw();
+        void OnGUI() => hud?.Draw();
 
         void OnApplicationQuit()
         {
@@ -121,6 +189,7 @@ namespace Takimada
             PlayerPrefs.SetString("tk.name", playerName);
             PlayerPrefs.SetString("tk.ip", ip);
             PlayerPrefs.SetString("tk.port", port);
+            settings?.Save();
             PlayerPrefs.Save();
         }
 
@@ -166,22 +235,26 @@ namespace Takimada
             if (!net.StartClient(ip.Trim(), Port)) status = "Bağlantı başlatılamadı.";
         }
 
+        const string NotLinkedMsg = "Proje Unity Cloud'a bağlı değil. Editörde Edit > Project Settings > Services'ten projeyi bağla, sonra yeni build al.";
+
         public async void HostOnline()
         {
             if (OnlineRooms.Provider == null) { status = "Online paket yüklü değil (com.unity.services.multiplayer)."; return; }
+            if (string.IsNullOrEmpty(Application.cloudProjectId)) { status = NotLinkedMsg; Debug.LogWarning("Satan: " + NotLinkedMsg); return; }
             SavePrefs();
             isLocal = false; isOnlineRoom = true; busy = true;
             status = "Unity Relay odası kuruluyor...";
             try
             {
-                string code = await OnlineRooms.Provider.CreateRoom(Mathf.Clamp(lobby.cfg.maxPlayers, 2, 8));
+                string code = await OnlineRooms.Provider.CreateRoom(8);
                 lobby.code = code;
                 status = "";
                 MarkLobbyDirty();
             }
             catch (Exception e)
             {
-                status = "Oda kurulamadı: " + e.Message + "\n(Project Settings > Services ile projeyi Unity Cloud'a bağladın mı?)";
+                Debug.LogException(e);
+                status = "Oda kurulamadı: " + e.Message + "\n(Unity Cloud panelinde Relay açık mı? Ayrıntı Console'da.)";
                 net.Shutdown();
                 view = View.Menu;
             }
@@ -192,12 +265,14 @@ namespace Takimada
         {
             if (OnlineRooms.Provider == null) { status = "Online paket yüklü değil (com.unity.services.multiplayer)."; return; }
             if (string.IsNullOrWhiteSpace(joinCode)) { status = "Oda kodunu yaz."; return; }
+            if (string.IsNullOrEmpty(Application.cloudProjectId)) { status = NotLinkedMsg; Debug.LogWarning("Satan: " + NotLinkedMsg); return; }
             SavePrefs();
             isLocal = false; isHost = false; isOnlineRoom = true; busy = true;
             status = "Odaya katılınıyor...";
             try { await OnlineRooms.Provider.JoinRoom(joinCode); }
             catch (Exception e)
             {
+                Debug.LogException(e);
                 status = "Katılınamadı: " + e.Message;
                 net.Shutdown();
             }
@@ -212,6 +287,7 @@ namespace Takimada
             engine = null;
             state = null;
             clientSeat.Clear();
+            chat.Clear();
             isHost = false; isLocal = false; isOnlineRoom = false;
             mySeatId = -1;
             lobby = new LobbyInfo { cfg = lobby.cfg };
@@ -226,6 +302,7 @@ namespace Takimada
         {
             isHost = true; isLocal = false;
             clientSeat.Clear();
+            chat.Clear();
             lobby = new LobbyInfo { cfg = lobby.cfg, code = lobby.code };
             lobby.seats.Add(new Seat { id = 0, name = CleanName(), color = 0 });
             nextSeatId = 1;
@@ -237,6 +314,7 @@ namespace Takimada
         void OnConnectedToServer()
         {
             status = "Bağlandı, lobiye giriliyor...";
+            chat.Clear();
             net.SendToServer("hello", JsonUtility.ToJson(new HelloMsg { name = CleanName(), protocol = Protocol }));
         }
 
@@ -313,6 +391,9 @@ namespace Takimada
                     BroadcastLobby();
                     break;
                 }
+                case "chat":
+                    if (clientSeat.TryGetValue(sender, out int chatSeat)) HostChat(chatSeat, JsonUtility.FromJson<TextMsg>(json).text);
+                    break;
                 case "color":
                     if (clientSeat.TryGetValue(sender, out int cs)) CycleColor(cs);
                     break;
@@ -344,6 +425,9 @@ namespace Takimada
                     break;
                 case "state":
                     SetState(JsonUtility.FromJson<GameState>(json));
+                    break;
+                case "chat":
+                    AddChat(JsonUtility.FromJson<ChatLine>(json));
                     break;
                 case "err":
                     hud.Toast(JsonUtility.FromJson<TextMsg>(json).text, true);
@@ -425,6 +509,8 @@ namespace Takimada
             if (!isHost) return;
             var seats = lobby.seats.Select(s => new SeatInfo { name = s.name, color = s.color, seat = s.id }).ToList();
             engine = Engine.Create(lobby.cfg, seats);
+            engine.Clock = () => Time.realtimeSinceStartupAsDouble;
+            engine.StartClock();
             lobby.started = true;
             BroadcastLobby();
             BroadcastState();
@@ -447,13 +533,20 @@ namespace Takimada
         void BroadcastState()
         {
             if (engine == null) return;
-            if (isLocal) { SetState(engine.S.Clone()); return; }
-            SetState(engine.S.ForViewer(PlayerIndexOfSeat(mySeatId)));
+            if (isLocal) { SetState(WithTimer(engine.S.Clone())); return; }
+            SetState(WithTimer(engine.S.ForViewer(PlayerIndexOfSeat(mySeatId))));
             foreach (var kv in clientSeat)
             {
                 int idx = PlayerIndexOfSeat(kv.Value);
-                net.Send(kv.Key, "state", JsonUtility.ToJson(engine.S.ForViewer(idx)));
+                net.Send(kv.Key, "state", JsonUtility.ToJson(WithTimer(engine.S.ForViewer(idx))));
             }
+        }
+
+        GameState WithTimer(GameState s)
+        {
+            s.timerLeft = engine.TimeLeft;
+            s.timerTotal = engine.TimeTotal;
+            return s;
         }
 
         void SetState(GameState s)
@@ -484,6 +577,39 @@ namespace Takimada
                 }
                 return state.players.FindIndex(p => p.seat == mySeatId);
             }
+        }
+
+        // =====================================================================
+        // Sohbet: oyun durumundan bağımsız; istemci sunucuya yollar, sunucu adı ve rengi ekleyip herkese dağıtır.
+
+        public const int ChatMax = 140;
+
+        public void SendChat(string text)
+        {
+            text = (text ?? "").Trim();
+            if (text.Length == 0 || isLocal) return;
+            if (text.Length > ChatMax) text = text.Substring(0, ChatMax);
+            if (isHost) HostChat(mySeatId, text);
+            else net.SendToServer("chat", JsonUtility.ToJson(new TextMsg { text = text }));
+        }
+
+        void HostChat(int seatId, string text)
+        {
+            var seat = lobby.seats.Find(s => s.id == seatId);
+            if (seat == null || string.IsNullOrWhiteSpace(text)) return;
+            text = text.Trim();
+            if (text.Length > ChatMax) text = text.Substring(0, ChatMax);
+            var line = new ChatLine { name = seat.name, color = seat.color, text = text };
+            AddChat(line);
+            var json = JsonUtility.ToJson(line);
+            foreach (var c in clientSeat.Keys.ToList()) net.Send(c, "chat", json);
+        }
+
+        void AddChat(ChatLine line)
+        {
+            chat.Add(line);
+            if (chat.Count > 200) chat.RemoveRange(0, chat.Count - 200);
+            chatVersion++;
         }
 
         public void Send(GameAction a, int asPlayer = -1)

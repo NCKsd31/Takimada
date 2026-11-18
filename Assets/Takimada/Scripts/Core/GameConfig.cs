@@ -18,6 +18,13 @@ namespace Takimada
         public int diceMode = 0;                 // 0 = gerçek zar, 1 = dengeli zar destesi (36 kombinasyon)
         public bool specialBuildPhase = false;   // 5-6 kişilik oyunlardaki ek inşa aşaması
 
+        // --- Süre ---
+        public bool turnTimer = true;
+        public int rollSeconds = 10;             // zar atmak için süre; dolunca zar kendiliğinden atılır
+        public int turnSeconds = 50;             // ticaret/inşa süresi; dolunca tur biter
+        public int actionBonusSeconds = 10;      // sırası gelen her hamle yaptığında eklenen süre (turnSeconds'ı aşmaz)
+        public int shortPhaseSeconds = 20;       // kart atma, korsan taşıma, çalma, ek inşa
+
         // --- Harita ---
         public string rowLengths = "3,4,5,4,3";
         public int[] terrainCounts = { 1, 4, 3, 4, 4, 3 }; // Volkan, Orman, Kil Ocağı, Otlak, Tarla, Dağ
@@ -221,6 +228,10 @@ namespace Takimada
             yearOfPlentyCount = Math.Max(0, yearOfPlentyCount);
             maxDevPlaysPerTurn = Math.Max(0, maxDevPlaysPerTurn);
             maxOffersPerPlayer = Math.Max(1, Math.Min(6, maxOffersPerPlayer));
+            rollSeconds = Math.Max(3, Math.Min(120, rollSeconds));
+            turnSeconds = Math.Max(10, Math.Min(600, turnSeconds));
+            actionBonusSeconds = Math.Max(0, Math.Min(120, actionBonusSeconds));
+            shortPhaseSeconds = Math.Max(5, Math.Min(120, shortPhaseSeconds));
         }
     }
 }
