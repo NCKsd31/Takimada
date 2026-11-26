@@ -28,8 +28,21 @@ namespace Takimada
         // Odun, Tuğla, Koyun, Buğday, Taş
         public static readonly Color[] Res =
         {
-            Hex("#D98A3D"), Hex("#E2553A"), Hex("#8FD14F"), Hex("#F5C531"), Hex("#8EA6C2")
+            Hex("#2F6B34"), Hex("#E2553A"), Hex("#B8E58C"), Hex("#F5C531"), Hex("#8EA6C2")
         };
+
+        /// <summary>Kaynak rengi koyu mu (odun: koyu yeşil)? Koyu zeminde simge ve yazı açık renk çizilir.</summary>
+        public static bool DarkRes(int r)
+        {
+            var c = Res[Mathf.Clamp(r, 0, Res.Length - 1)];
+            return 0.299f * c.r + 0.587f * c.g + 0.114f * c.b < 0.42f;
+        }
+
+        /// <summary>Kaynak renkli zeminin üstündeki simge/yazı rengi.</summary>
+        public static Color ResInk(int r) => DarkRes(r) ? Token : Ink;
+
+        /// <summary>Koyu panel üstünde kaynak adını yazmak için okunur renk.</summary>
+        public static Color ResText(int r) => DarkRes(r) ? Color.Lerp(Res[r], Color.white, 0.45f) : Res[r];
 
         public static readonly string[] PlayerNames = { "Kırmızı", "Mavi", "Turuncu", "Beyaz", "Mor", "Pembe", "Turkuaz", "Kahve" };
         public static readonly Color[] Player =
@@ -38,6 +51,14 @@ namespace Takimada
             Hex("#AE90DB"), Hex("#EC9CC0"), Hex("#6FC6BA"), Hex("#A9825F")
         };
         public static Color PlayerColor(int i) => Player[((i % Player.Length) + Player.Length) % Player.Length];
+
+        // haritadaki taşların rengi: aynı tonlar ama doygun ve parlak, ki ada renklerinden ayrılsın
+        public static readonly Color[] Piece =
+        {
+            Hex("#F0262B"), Hex("#2366FF"), Hex("#FF8A00"), Hex("#FFFFFF"),
+            Hex("#9B30FF"), Hex("#FF3DA8"), Hex("#00E0D0"), Hex("#7A4518")
+        };
+        public static Color PieceColor(int i) => Piece[((i % Piece.Length) + Piece.Length) % Piece.Length];
 
         /// <summary>Pastel ton: doygunluğu azaltır, rengi beyaza doğru açar. Alfa (ışıma) korunur.</summary>
         public static Color Soft(Color c, float sat = 0.6f, float lift = 0.18f)
@@ -302,6 +323,7 @@ namespace Takimada
         static readonly Color Rock = C("#7D838A"), RockLight = C("#A3A8AD"), Snow = C("#F4F6F8"), CutStone = C("#BFC2C4");
         static readonly Color VolcRock = C("#3E302B"), CraterDark = C("#231A17"), Lava = C("#FF6A2A");
         static readonly Color Plank = C("#7A5532"), PlankTop = C("#9A7148"), Post = C("#4E3622");
+        static readonly Color RobberRed = C("#D8352A");
         static readonly Color FlagBlack = C("#16130F"), Bone = C("#EDE7D8"), Chest = C("#5B3A1E"), Gold = C("#E0B53A");
 
         public void Init(Transform parent)
@@ -1212,18 +1234,99 @@ namespace Takimada
         static Color Glow(Color c, float amount) { c.a = 1f - Mathf.Clamp01(amount); return c; }
 
         // taş boyutları ve dış hat kalınlığı
-        const float HouseK = 1.3f, CityK = 1.25f, RoadW = 0.15f, RoadH = 0.09f, RoadLen = 0.72f, Edge = 0.013f;
+        const float HouseK = 1.3f, CityK = 1.65f, RoadW = 0.15f, RoadH = 0.09f, RoadLen = 0.72f, Edge = 0.018f;
         static readonly Color EdgeInk = C("#15110D");
 
-        /// <summary>outline: true ise dış hat kabukları ol'a yazılır (yalnızca gerçek taşlar; hayaletler değil).</summary>
-        void Road(Vector3 a, Vector3 b, float y, Color col, bool outline = false)
+        /// <summary>Hayalet yol (yerleştirme önizlemesi): düz kutu, uçları köşeden kısa.</summary>
+        void Road(Vector3 a, Vector3 b, float y, Color col)
         {
             var d = b - a;
             float yawDeg = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
             var c = Vector3.Lerp(a, b, 0.5f) + Up * (y - 0.005f);
-            var size = new Vector3(RoadW, RoadH, d.magnitude * RoadLen);
-            m.Box(c, size, yawDeg, Darker(col, 0.85f), col);
-            if (outline) ol.Box(c + Down * Edge, size + Vector3.one * (2 * Edge), yawDeg, EdgeInk);
+            m.Box(c, new Vector3(RoadW, RoadH, d.magnitude * RoadLen), yawDeg, Darker(col, 0.85f), col);
+        }
+
+        /// <summary>Bir yol ucunun bilgisi. joined: aynı oyuncunun başka yolu bu köşede birleşiyor.</summary>
+        struct RoadEnd
+        {
+            public bool joined;
+            public float y;        // bu uçtaki yol yüksekliği (birleşen yollar köşede aynı yüksekliğe gelir)
+            public float gapL, gapR; // sol/sağ komşu yola açı (derece); u'ya göre sol = +90°
+        }
+
+        // xz düzleminde döndürme (x, z bir 2B vektör gibi)
+        static Vector3 RotXZ(Vector3 v, float deg)
+        {
+            float r = deg * Mathf.Deg2Rad, cs = Mathf.Cos(r), sn = Mathf.Sin(r);
+            return new Vector3(v.x * cs - v.z * sn, 0, v.x * sn + v.z * cs);
+        }
+
+        /// <summary>
+        /// Uç köşe noktaları (u: köşeden yolun içine doğru birim yön). Birleşmeyen uç köşeden kısa ve düz kesilir;
+        /// birleşen uç, komşu yollarla aradaki açının ortasından gönye gibi kesilir, böylece yollar üst üste binmeden
+        /// tam oturur. Sırayla: sol, (köşe), sağ.
+        /// </summary>
+        static void EndCorners(Vector3 v, Vector3 u, RoadEnd end, float w, float gap, List<Vector3> pts)
+        {
+            var n = RotXZ(u, 90);
+            if (!end.joined)
+            {
+                pts.Add(v + u * gap + n * w);
+                pts.Add(v + u * gap - n * w);
+                return;
+            }
+            pts.Add(v + RotXZ(u, end.gapL / 2) * (w / Mathf.Sin(end.gapL * 0.5f * Mathf.Deg2Rad)));
+            pts.Add(v);
+            pts.Add(v + RotXZ(u, -end.gapR / 2) * (w / Mathf.Sin(end.gapR * 0.5f * Mathf.Deg2Rad)));
+        }
+
+        readonly List<Vector3> roadPts = new List<Vector3>();
+
+        /// <summary>Yol gövdesi: taban izi dışbükey çokgen olan prizma. Üst yüzey iki uç yüksekliği arasında eğimli.</summary>
+        void RoadPrism(Mesh3 mesh, Vector3 a, Vector3 b, RoadEnd ea, RoadEnd eb, float w, float gap, float lift, Color top, Color side, bool bottom)
+        {
+            var d = b - a; d.y = 0;
+            float len = d.magnitude;
+            if (len < 1e-4f) return;
+            var dir = d / len;
+            roadPts.Clear();
+            EndCorners(a, dir, ea, w, gap, roadPts);
+            int startB = roadPts.Count;
+            EndCorners(b, -dir, eb, w, gap, roadPts);
+            // A ucu: sol(+n) ... sağ(-n); B ucu u=-dir olduğundan sol(-n) ... sağ(+n). Çevre: A sırası, sonra B sırası.
+            int count = roadPts.Count;
+            // saat yönünde (yukarıdan, x sağ z ileri) sırala: Unity'de ön yüz saat yönü
+            float area = 0;
+            for (int i = 0; i < count; i++) { var p = roadPts[i]; var q = roadPts[(i + 1) % count]; area += p.x * q.z - q.x * p.z; }
+            if (area > 0) roadPts.Reverse();
+
+            float yBot = Mathf.Min(ea.y, eb.y) - 0.005f - lift;
+            Vector3 Top(Vector3 p)
+            {
+                float t = Mathf.Clamp01(Vector3.Dot(p - a, dir) / len);
+                return new Vector3(p.x, Mathf.Lerp(ea.y, eb.y, t) - 0.005f + RoadH + lift, p.z);
+            }
+            Vector3 Bot(Vector3 p) => new Vector3(p.x, yBot, p.z);
+
+            var t0 = Top(roadPts[0]);
+            for (int i = 1; i + 1 < count; i++) mesh.Tri(t0, Top(roadPts[i]), Top(roadPts[i + 1]), top);
+            for (int i = 0; i < count; i++)
+            {
+                var p = roadPts[i]; var q = roadPts[(i + 1) % count];
+                if ((q - p).sqrMagnitude < 1e-8f) continue;
+                mesh.Quad(Bot(q), Top(q), Top(p), Bot(p), side);
+            }
+            if (!bottom) return;
+            var b0 = Bot(roadPts[0]);
+            for (int i = 1; i + 1 < count; i++) mesh.Tri(b0, Bot(roadPts[i + 1]), Bot(roadPts[i]), side);
+        }
+
+        /// <summary>Gerçek yol: gövde ve dış hat kabuğu.</summary>
+        void RoadPiece(Vector3 a, Vector3 b, RoadEnd ea, RoadEnd eb, Color col)
+        {
+            float gap = Vector3.Distance(a, b) * (1f - RoadLen) / 2;
+            RoadPrism(m, a, b, ea, eb, RoadW / 2, gap, 0, col, Darker(col, 0.85f), false);
+            RoadPrism(ol, a, b, ea, eb, RoadW / 2 + Edge, gap - Edge, Edge, EdgeInk, EdgeInk, true);
         }
 
         void OBox(Vector3 b, Vector3 size, float yaw) => ol.Box(b + Down * Edge, size + Vector3.one * (2 * Edge), yaw, EdgeInk);
@@ -1269,15 +1372,16 @@ namespace Takimada
 
         void Robber(Vector3 p)
         {
-            m.Ellipsoid(p + Up * 0.01f, new Vector3(0.09f, 0.035f, 0.08f), 6, 3, 0, StoneDark);
-            m.Cylinder(p, p + Up * 0.52f, 0.014f, 5, Post);
-            var t0 = p + Up * 0.5f;
-            m.Quad(t0, t0 + new Vector3(0.25f, 0.01f, 0.03f), t0 + new Vector3(0.22f, -0.18f, 0.02f), t0 + new Vector3(0f, -0.19f, 0f), FlagBlack);
-            m.Tri(t0 + new Vector3(0.22f, -0.18f, 0.02f), t0 + new Vector3(0.12f, -0.19f, 0.01f), t0 + new Vector3(0.17f, -0.24f, 0.015f), FlagBlack);
-            m.Ellipsoid(t0 + new Vector3(0.11f, -0.09f, 0.012f), new Vector3(0.032f, 0.032f, 0.016f), 6, 3, 0, Bone);
-            var chest = p + new Vector3(0.1f, 0, -0.1f);
-            m.Box(chest, new Vector3(0.12f, 0.07f, 0.08f), 20f, Chest);
-            m.Box(chest + Up * 0.07f, new Vector3(0.1f, 0.015f, 0.06f), 20f, Gold);
+            const float K = 1.4f; // korsan uzaktan da seçilsin diye büyük
+            m.Ellipsoid(p + Up * 0.01f, new Vector3(0.09f, 0.035f, 0.08f) * K, 6, 3, 0, StoneDark);
+            m.Cylinder(p, p + Up * 0.52f * K, 0.016f * K, 5, Post);
+            var t0 = p + Up * 0.5f * K;
+            m.Quad(t0, t0 + new Vector3(0.25f, 0.01f, 0.03f) * K, t0 + new Vector3(0.22f, -0.18f, 0.02f) * K, t0 + new Vector3(0f, -0.19f, 0f) * K, FlagBlack);
+            m.Tri(t0 + new Vector3(0.22f, -0.18f, 0.02f) * K, t0 + new Vector3(0.12f, -0.19f, 0.01f) * K, t0 + new Vector3(0.17f, -0.24f, 0.015f) * K, FlagBlack);
+            m.Ellipsoid(t0 + new Vector3(0.11f, -0.09f, 0.012f) * K, new Vector3(0.032f, 0.032f, 0.016f) * K, 6, 3, 0, Bone);
+            var chest = p + new Vector3(0.1f, 0, -0.1f) * K;
+            m.Box(chest, new Vector3(0.12f, 0.07f, 0.08f) * K, 20f, Chest);
+            m.Box(chest + Up * 0.07f * K, new Vector3(0.1f, 0.015f, 0.06f) * K, 20f, Gold);
         }
 
         static float PieceYaw(int v) => ((v * 7919) % 5) * 12f - 24f;
@@ -1288,19 +1392,64 @@ namespace Takimada
             var b = s.board;
             ol.Clear();
             if (!Matches(b)) { m.Apply(pieceMesh); ol.Apply(outlineMesh); return; }
+            // köşede bina yoksa ve aynı oyuncunun iki ya da daha çok yolu buluşuyorsa yollar birleşir:
+            // her köşe/oyuncu için oradan çıkan yolların yön açıları ve en yüksek yol yüksekliği
+            var joinAngles = new Dictionary<long, List<float>>();
+            var joinHigh = new Dictionary<long, float>();
+            long Key(int v, int o) => (long)v * 64 + o;
+            Vector3 VW(int v) => W(b.verts[v].x, b.verts[v].y);
+            float Angle(int from, int to) { var d = VW(to) - VW(from); return Mathf.Atan2(d.z, d.x) * Mathf.Rad2Deg; }
+            for (int e = 0; e < s.eOwner.Length; e++)
+            {
+                int o = s.eOwner[e];
+                if (o < 0) continue;
+                float y = EdgeTop(b, e);
+                var ed = b.edges[e];
+                for (int k = 0; k < 2; k++)
+                {
+                    int v = k == 0 ? ed.a : ed.b, other = k == 0 ? ed.b : ed.a;
+                    if (v < s.vOwner.Length && s.vOwner[v] >= 0) continue;
+                    long key = Key(v, o);
+                    if (!joinAngles.TryGetValue(key, out var list)) joinAngles[key] = list = new List<float>();
+                    list.Add(Angle(v, other));
+                    joinHigh[key] = joinHigh.TryGetValue(key, out float hi) ? Mathf.Max(hi, y) : y;
+                }
+            }
+            RoadEnd End(int v, int other, int o, float y)
+            {
+                var end = new RoadEnd { y = y };
+                if (!joinAngles.TryGetValue(Key(v, o), out var list) || list.Count < 2) return end;
+                float self = Angle(v, other), minD = 360, maxD = 0;
+                bool skipped = false;
+                foreach (float a in list)
+                {
+                    if (!skipped && Mathf.Abs(Mathf.DeltaAngle(a, self)) < 0.5f) { skipped = true; continue; }
+                    float diff = Mathf.Repeat(a - self, 360f);
+                    if (diff < 1f || diff > 359f) continue;
+                    minD = Mathf.Min(minD, diff);
+                    maxD = Mathf.Max(maxD, diff);
+                }
+                if (minD >= 360) return end;
+                end.joined = true;
+                end.y = Mathf.Max(joinHigh[Key(v, o)], VertTop(b, v)); // köşedeki en yüksek karonun üstünde buluşur
+                end.gapL = minD;
+                end.gapR = 360f - maxD;
+                return end;
+            }
             for (int e = 0; e < s.eOwner.Length; e++)
             {
                 int o = s.eOwner[e];
                 if (o < 0) continue;
                 var ed = b.edges[e];
-                Road(W(b.verts[ed.a].x, b.verts[ed.a].y), W(b.verts[ed.b].x, b.verts[ed.b].y), EdgeTop(b, e), Pal.PlayerColor(s.players[o].color), true);
+                float y = EdgeTop(b, e);
+                RoadPiece(VW(ed.a), VW(ed.b), End(ed.a, ed.b, o, y), End(ed.b, ed.a, o, y), Pal.PieceColor(s.players[o].color));
             }
             for (int v = 0; v < s.vOwner.Length; v++)
             {
                 int o = s.vOwner[v];
                 if (o < 0) continue;
                 var p = W(b.verts[v].x, b.verts[v].y, VertTop(b, v));
-                var col = Pal.PlayerColor(s.players[o].color);
+                var col = Pal.PieceColor(s.players[o].color);
                 if (s.vLevel[v] == 2) City(p, PieceYaw(v), col, Darker(col, 0.62f), true, true);
                 else House(p, PieceYaw(v), col, Darker(col, 0.62f), true, true);
             }
@@ -1330,6 +1479,14 @@ namespace Takimada
                     foreach (var h in s.lastProduction)
                         if (h >= 0 && h < b.hexes.Count)
                             m.HexRing(W(b.hexes[h].x, b.hexes[h].y, hexTop[h] + 0.01f + flash * 0.05f), 0.8f, 0.95f, 0.035f, Glow(C("#FFD36B"), flash));
+
+                // korsanın durduğu karo: sürekli, yavaş nabız atan kırmızı çerçeve
+                if (s.robber >= 0 && s.robber < b.hexes.Count && s.robber < hexTop.Length)
+                {
+                    float rp = 0.5f + 0.5f * Mathf.Sin(Time.time * 2.2f);
+                    var rc = W(b.hexes[s.robber].x, b.hexes[s.robber].y, hexTop[s.robber] + 0.012f);
+                    m.HexRing(rc, 0.8f, 0.96f, 0.045f + 0.015f * rp, Glow(RobberRed, 0.3f + 0.4f * rp));
+                }
 
                 float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 5f);
                 var soft = Glow(C("#E8E4DA"), 0.2f + 0.3f * pulse);

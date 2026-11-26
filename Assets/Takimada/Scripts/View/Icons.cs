@@ -102,7 +102,7 @@ namespace Takimada
             if (glyphTex[i] == null)
             {
                 var px = new Color32[GlyphSize * GlyphSize];
-                Color32 ink = Ink;
+                Color32 ink = Pal.DarkRes(i) ? (Color32)Pal.Token : (Color32)Ink; // koyu kartta (odun) açık siluet
                 for (int k = 0; k < px.Length; k++) { ink.a = glyphAlpha[i][k]; px[k] = ink; }
                 glyphTex[i] = ToTexture(px, GlyphSize, GlyphSize);
             }
@@ -151,6 +151,45 @@ namespace Takimada
                 }
             gear = ToTexture(px, N, N);
             return gear;
+        }
+
+        static readonly Texture2D[] arrowHeads = new Texture2D[4];
+
+        /// <summary>
+        /// Ok ucu: beyaz, kenarları yumuşak üçgen; GUI.color ile boyanır.
+        /// dir ekrana göre: 0 sağ, 1 aşağı, 2 sol, 3 yukarı. Uç, karenin o kenarına dayanır.
+        /// </summary>
+        public static Texture2D ArrowHead(int dir)
+        {
+            dir &= 3;
+            if (arrowHeads[dir] != null) return arrowHeads[dir];
+            const int N = 48, AA = 4;
+            const float Base = 0.06f, TipAt = 0.97f, Half = 0.44f;
+            var px = new Color32[N * N];
+            for (int y = 0; y < N; y++)
+                for (int x = 0; x < N; x++)
+                {
+                    int hit = 0;
+                    for (int sy = 0; sy < AA; sy++)
+                        for (int sx = 0; sx < AA; sx++)
+                        {
+                            float u = (x + (sx + 0.5f) / AA) / N;
+                            float down = 1f - (y + (sy + 0.5f) / AA) / N; // doku satırları aşağıdan yukarı
+                            float a, b; // a: ok boyunca (0 taban → 1 uç), b: enine
+                            switch (dir)
+                            {
+                                case 0: a = u; b = down; break;
+                                case 1: a = down; b = u; break;
+                                case 2: a = 1f - u; b = down; break;
+                                default: a = 1f - down; b = u; break;
+                            }
+                            float half = Half * (TipAt - a) / (TipAt - Base);
+                            if (a >= Base && a <= TipAt && Mathf.Abs(b - 0.5f) <= half) hit++;
+                        }
+                    px[y * N + x] = new Color32(255, 255, 255, (byte)(hit * 255 / (AA * AA)));
+                }
+            arrowHeads[dir] = ToTexture(px, N, N);
+            return arrowHeads[dir];
         }
 
         static Texture2D card;

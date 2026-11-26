@@ -14,13 +14,37 @@ namespace Takimada
         int tTarget = -1, tCounter = -1;
         Vector2 logScroll;
         int lastLogCount;
+        string lastLogLine;
         string chat = "";
+
+        // kayıt satırı yükseklikleri: her karede yüzlerce satırı yeniden ölçmemek için
+        readonly Dictionary<string, float> logHeights = new Dictionary<string, float>();
+        float logHeightsW = -1;
+        GUIStyle logHeightsStyle;
+
+        float LogLineHeight(string line, float w)
+        {
+            if (w != logHeightsW || logHeightsStyle != Sty.small || logHeights.Count > 1000)
+            {
+                logHeights.Clear(); logHeightsW = w; logHeightsStyle = Sty.small;
+            }
+            if (!logHeights.TryGetValue(line, out float h)) { h = FlowHeight(line, Sty.small, w) + 2; logHeights[line] = h; }
+            return h;
+        }
+
+        // sohbet satırlarının hazır metinleri ve yükseklikleri
+        string[] chatTexts = new string[0];
+        float[] chatHeights = new float[0];
+        float chatTotal, chatCacheW = -1;
+        int chatCacheVersion = -1;
+        GUIStyle chatCacheStyle;
 
         void ResetDialogs()
         {
             yopOpen = monoOpen = tradeOpen = rulesOpen = confirmQuit = false;
             discardSel = new int[5]; yopSel = new int[5]; tGive = new int[5]; tGet = new int[5];
             tTarget = -1; tCounter = -1;
+            popOffers.Clear(); popAt.Clear();
         }
 
         bool BlockingModal()
@@ -48,6 +72,8 @@ namespace Takimada
             DrawBanner(s, me);
             DrawBottom(s, me);
             DrawSide(s, me);
+            // gelen teklif ekranın ortasında; bir pencere açıkken onun altında kalıp tıklamayı çalmasın diye çizilmez
+            if (!BlockingModal()) DrawOfferPopups(s, me);
 
             if (s.phase == Phase.GameOver) { DrawGameOver(s); return; }
             if (s.phase == Phase.Discard && me >= 0 && s.discardPending[me] > 0) DrawDiscard(s, me);
@@ -464,7 +490,7 @@ namespace Takimada
             GUI.color = col * tint;
             GUI.DrawTexture(new Rect(rect.x + 2.5f, rect.y + 2.5f, rect.width - 5, rect.height - 5), Icons.Card());
             var inner = new Rect(rect.x + 6, rect.y + 25, rect.width - 12, rect.height - 31);
-            GUI.color = Color.Lerp(col, Color.white, 0.22f) * tint;
+            GUI.color = Color.Lerp(col, Color.white, Pal.DarkRes(res) ? 0.1f : 0.22f) * tint;
             GUI.DrawTexture(inner, Icons.Card());
             GUI.color = tint;
             GUI.DrawTexture(new Rect(rect.x + 6, rect.y + 5, 18, 18), Icons.Glyph(res), ScaleMode.ScaleToFit, true);
@@ -603,7 +629,7 @@ namespace Takimada
                 y += 24;
                 foreach (var o in s.offers.ToList())
                 {
-                    if (y > r.yMax - 170) { Label(new Rect(x, y, w, 18), "Daha fazla teklif var...", Sty.dim); y += 22; break; }
+                    if (y > r.yMax - 240) { Label(new Rect(x, y, w, 18), "Daha fazla teklif var...", Sty.dim); y += 22; break; }
                     y = DrawOffer(s, me, o, new Rect(x, y, w, 0)) + 4;
                 }
                 y += 6;
@@ -619,13 +645,19 @@ namespace Takimada
                 Sty.Fill(view, new Color(0, 0, 0, 0.25f));
                 float lineH = 0;
                 var heights = new float[s.log.Count];
-                for (int i = 0; i < s.log.Count; i++) { heights[i] = FlowHeight(s.log[i], Sty.small, w - 24) + 2; lineH += heights[i]; }
-                if (s.log.Count != lastLogCount) { lastLogCount = s.log.Count; logScroll.y = float.MaxValue; }
-                logScroll = BeginScroll(view, logScroll, new Rect(0, 0, w - 18, Mathf.Max(lineH + 8, logH)));
+                for (int i = 0; i < s.log.Count; i++) { heights[i] = LogLineHeight(s.log[i], w - 24); lineH += heights[i]; }
+                // kayıt 300 satırda sabitlenince sayı değişmez; son satır da değiştiyse yeni kayıt gelmiştir
+                string lastLine = s.log.Count > 0 ? s.log[s.log.Count - 1] : null;
+                if (s.log.Count != lastLogCount || lastLine != lastLogLine) { lastLogCount = s.log.Count; lastLogLine = lastLine; logScroll.y = float.MaxValue; }
+                float contentH = Mathf.Max(lineH + 8, logH);
+                logScroll = BeginScroll(view, logScroll, new Rect(0, 0, w - 18, contentH));
+                // yalnızca görünen satırlar çizilir; oyun uzadıkça yüzlerce satırı her karede çizmek FPS'i düşürüyordu
+                float top = Mathf.Clamp(logScroll.y, 0, contentH - logH), bottom = top + logH;
                 float ly = 4;
                 for (int i = 0; i < s.log.Count; i++)
                 {
-                    FlowLabel(new Rect(6, ly, w - 24, heights[i]), s.log[i], s.log[i].StartsWith("—") ? Sty.Colored(Sty.small, Sty.Brass) : Sty.small);
+                    if (ly + heights[i] >= top && ly <= bottom)
+                        FlowLabel(new Rect(6, ly, w - 24, heights[i]), s.log[i], s.log[i].StartsWith("—") ? Sty.Colored(Sty.small, Sty.Brass) : Sty.small);
                     ly += heights[i];
                 }
                 EndScroll();
@@ -658,20 +690,30 @@ namespace Takimada
                 var view = new Rect(x, r.y + 32, w, inputY - 6 - (r.y + 32));
                 Sty.Fill(view, new Color(0, 0, 0, 0.25f));
                 var lines = app.chat;
-                var texts = new string[lines.Count];
-                var heights = new float[lines.Count];
-                float total = 0;
-                for (int i = 0; i < lines.Count; i++) { texts[i] = ChatText(lines[i]); heights[i] = Sty.small.CalcHeight(new GUIContent(texts[i]), w - 24) + 2; total += heights[i]; }
+                // metinler ve yükseklikler yalnızca yeni mesaj gelince ya da genişlik değişince yeniden hesaplanır
+                if (chatCacheVersion != app.chatVersion || chatCacheW != w || chatCacheStyle != Sty.small || chatTexts.Length != lines.Count)
+                {
+                    chatCacheVersion = app.chatVersion; chatCacheW = w; chatCacheStyle = Sty.small;
+                    chatTexts = new string[lines.Count];
+                    chatHeights = new float[lines.Count];
+                    chatTotal = 0;
+                    for (int i = 0; i < lines.Count; i++) { chatTexts[i] = ChatText(lines[i]); chatHeights[i] = Sty.small.CalcHeight(new GUIContent(chatTexts[i]), w - 24) + 2; chatTotal += chatHeights[i]; }
+                }
+                var texts = chatTexts;
+                var heights = chatHeights;
+                float total = chatTotal;
                 if (app.chatVersion != chatSeen) { chatSeen = app.chatVersion; chatScroll.y = float.MaxValue; }
                 if (lines.Count == 0) Label(new Rect(view.x + 8, view.y + 6, view.width - 16, 20), "Henüz mesaj yok. Enter ile yaz.", Sty.dim);
                 else
                 {
-                    chatScroll = BeginScroll(view, chatScroll, new Rect(0, 0, w - 18, Mathf.Max(total + 8, view.height)));
+                    float contentH = Mathf.Max(total + 8, view.height);
+                    chatScroll = BeginScroll(view, chatScroll, new Rect(0, 0, w - 18, contentH));
+                    float visTop = Mathf.Clamp(chatScroll.y, 0, contentH - view.height), visBottom = visTop + view.height;
                     // az mesaj varken alta yaslı dursun
                     float ly = Mathf.Max(4, view.height - total - 4);
-                    for (int i = 0; i < lines.Count; i++)
+                    for (int i = 0; i < texts.Length; i++)
                     {
-                        Label(new Rect(6, ly, w - 24, heights[i]), texts[i], Sty.small);
+                        if (ly + heights[i] >= visTop && ly <= visBottom) Label(new Rect(6, ly, w - 24, heights[i]), texts[i], Sty.small);
                         ly += heights[i];
                     }
                     EndScroll();
@@ -803,73 +845,6 @@ namespace Takimada
 
         static string Cards0(int[] c) => Util.Sum(c) == 0 ? "hiçbir şey" : T.Cards(c);
 
-        /// <summary>Tek bir teklif kartı. Kartın alt kenarının y değerini döndürür.</summary>
-        float DrawOffer(GameState s, int me, TradeOffer o, Rect at)
-        {
-            float x = at.x, w = at.width;
-            var parties = Rules.OfferParties(s, o);
-            var buttons = new List<(string label, bool on, Action act)>();
-            int id = o.id, from = o.from;
-            if (app.isLocal)
-            {
-                foreach (var p in parties)
-                {
-                    if (o.rejected.Contains(p)) continue;
-                    int pp = p;
-                    buttons.Add((Esc(s.players[p].name) + " ile takas", Util.Has(s.players[p].res, o.get), () => LocalTrade(id, from, pp)));
-                }
-                buttons.Add(("İptal", true, () => app.Send(new GameAction { type = Act.CancelOffer, target = id }, from)));
-            }
-            else if (o.from == me)
-            {
-                foreach (var p in o.accepted)
-                {
-                    int pp = p;
-                    buttons.Add((Esc(Name(s, p)) + " ile takas", true, () => app.Send(new GameAction { type = Act.ConfirmOffer, target = id, a = pp })));
-                }
-                buttons.Add(("İptal", true, () => app.Send(new GameAction { type = Act.CancelOffer, target = id })));
-            }
-            else if (me >= 0 && parties.Contains(me) && !o.rejected.Contains(me))
-            {
-                bool has = Util.Has(s.players[me].res, o.get);
-                bool acc = o.accepted.Contains(me);
-                buttons.Add((acc ? "Kabul ettin" : has ? "Kabul et" : "Kartın yok", has && !acc, () => app.Send(new GameAction { type = Act.AcceptOffer, target = id })));
-                buttons.Add(("Reddet", true, () => app.Send(new GameAction { type = Act.RejectOffer, target = id })));
-                buttons.Add(("Karşı teklif", true, () => OpenCounter(s, me, o)));
-            }
-
-            // yanıt durumu: kim kabul etti, kim reddetti
-            string status = app.isLocal ? "" : string.Join(" · ", parties.Select(p => Esc(Name(s, p)) + ": " +
-                (o.accepted.Contains(p) ? "<color=#7CC47F>kabul</color>" : o.rejected.Contains(p) ? "<color=#E0675A>ret</color>" : "bekliyor")));
-
-            float bx0 = x + 10, maxX = x + w - 6, fx = bx0;
-            int lines = 1;
-            var widths = buttons.Select(b => Mathf.Max(60, Sty.btnSmall.CalcSize(new GUIContent(b.label)).x + 14)).ToList();
-            foreach (var bw in widths) { if (fx + bw > maxX && fx > bx0) { lines++; fx = bx0; } fx += bw + 4; }
-            float statusH = status.Length > 0 ? Sty.small.CalcHeight(new GUIContent(status), w - 16) : 0;
-            float rowH = 74 + statusH + (buttons.Count > 0 ? lines * 26 : 0) + 4;
-
-            var row = new Rect(x, at.y, w, rowH);
-            Sty.Fill(row, Sty.Panel2);
-            Sty.Fill(new Rect(row.x, row.y, 4, row.height), Pal.PlayerColor(s.players[o.from].color));
-            string head = "<b>" + Esc(Name(s, o.from)) + "</b> → " + (o.to >= 0 ? Esc(Name(s, o.to)) : "herkes") + (o.counterOf > 0 ? "  · karşı teklif" : "");
-            Label(new Rect(row.x + 10, row.y + 3, w - 16, 18), head, Sty.small);
-            Label(new Rect(row.x + 10, row.y + 22, 50, 24), "Verir", MidLeft(Sty.dim));
-            CardsRow(row.x + 56, row.y + 22, o.give, 24, Sty.small);
-            Label(new Rect(row.x + 10, row.y + 48, 50, 24), "İster", MidLeft(Sty.dim));
-            CardsRow(row.x + 56, row.y + 48, o.get, 24, Sty.small);
-            float by = row.y + 74;
-            if (statusH > 0) { Label(new Rect(row.x + 10, by, w - 16, statusH), status, Sty.dim); by += statusH + 2; }
-            fx = bx0;
-            for (int k = 0; k < buttons.Count; k++)
-            {
-                if (fx + widths[k] > maxX && fx > bx0) { by += 26; fx = bx0; }
-                if (Btn(new Rect(fx, by, widths[k], 22), buttons[k].label, buttons[k].on, Sty.btnSmall)) buttons[k].act();
-                fx += widths[k] + 4;
-            }
-            return row.yMax;
-        }
-
         // tek ekranda kabul ve onay aynı anda yapılır
         void LocalTrade(int id, int from, int p)
         {
@@ -947,26 +922,6 @@ namespace Takimada
             Label(b, text, Sty.Colored(Sty.center, Pal.Ink));
         }
 
-        /// <summary>"İstiyorum: [simge][simge]..." satırı.</summary>
-        void TradeStrip(Rect r, string title, int[] cards)
-        {
-            Label(new Rect(r.x, r.y, 92, r.height), title, MidLeft(Sty.label));
-            float x = r.x + 92;
-            float Ic = 26, total = 0;
-            for (int i = 0; i < 5; i++) if (cards[i] > 0) total += IconRunWidth(cards[i], Ic) + 8;
-            if (total > r.xMax - x) Ic = Mathf.Max(12, Ic * (r.xMax - x) / total); // çok kart seçilince sığsın
-            bool any = false;
-            for (int i = 0; i < 5; i++)
-            {
-                if (cards[i] <= 0) continue;
-                any = true;
-                float step = IconRunStep(cards[i], Ic);
-                for (int k = 0; k < cards[i]; k++) ResIcon(new Rect(x + k * step, r.y + (r.height - Ic) / 2, Ic, Ic), i);
-                x += IconRunWidth(cards[i], Ic) + 8;
-            }
-            if (!any) Label(new Rect(x, r.y, r.xMax - x, r.height), "—", MidLeft(Sty.dim));
-        }
-
         /// <summary>Büyük simgeli kare buton (oyuncular / banka).</summary>
         bool IconButton(Rect r, string symbol, string fallback, string label, bool enabled)
         {
@@ -991,7 +946,7 @@ namespace Takimada
             int to = chooseTarget ? tTarget : s.current;
             for (int i = 0; i < 5; i++) tGive[i] = Math.Min(tGive[i], pl.res[i]);
 
-            const float Summary = 108;
+            const float ExSumH = 140, Summary = ExSumH + 44;
             float h = 54 + 30 + TCardH + 18 + 12 + Summary + (chooseTarget ? 36 : 0) + 12 + 30 + TCardH + 30;
             var r = Modal(660, h, tCounter > 0 ? "Karşı teklif" : "Ticaret");
             if (Btn(new Rect(r.xMax - 100, r.y + 14, 80, 26), "Kapat", true, Sty.btnSmall)) CloseTrade();
@@ -1019,8 +974,9 @@ namespace Takimada
             y += 12;
             const float BtnW = 92;
             float sumW = r.width - 48 - BtnW * 2 - 12;
-            TradeStrip(new Rect(x0, y, sumW, 30), "İstiyorum", tGet);
-            TradeStrip(new Rect(x0, y + 34, sumW, 30), "Veriyorum", tGive);
+            // özet: üstte sen; teklifi yapan sensin, o yüzden önce istediklerin (aşağı ok), altta verdiklerin (yukarı ok)
+            var (meName, meCol) = PlayerEnd(s, me, me);
+            DrawExchange(new Rect(x0, y, sumW, ExSumH), meName, meCol, tGive, tGet, true, 26, Sty.Panel, Sty.small);
 
             string berr = bank ? Rules.BankTradeError(s, me, tGive, tGet) : null;
             string perr = players ? Rules.OfferError(s, me, to, tGive, tGet) : null;
@@ -1033,7 +989,7 @@ namespace Takimada
                 if (bank) lines.Add("Banka: " + (berr ?? "takasa hazır."));
                 info = string.Join("\n", lines);
             }
-            Label(new Rect(x0, y + 70, sumW, 38), info, Sty.dim);
+            Label(new Rect(x0, y + ExSumH + 6, sumW, 38), info, Sty.dim);
 
             var pr = new Rect(r.xMax - 24 - BtnW * 2 - 8, y, BtnW, Summary - 6);
             var bkr = new Rect(r.xMax - 24 - BtnW, y, BtnW, Summary - 6);
@@ -1053,16 +1009,16 @@ namespace Takimada
             if (chooseTarget)
             {
                 Label(new Rect(x0, y + 4, 60, 20), "Kime:", Sty.label);
-                int n = s.players.Count;
+                // hepsi seçiliyken birine tıklamak yalnız onu seçer; seçili olana yeniden tıklamak hepsini geri seçer
+                int n = s.players.Count, others = Mathf.Max(1, n - 1);
                 float bx = x0 + 60;
-                float bw = Mathf.Min(100, (r.xMax - 24 - bx - 4 * (n - 1)) / n);
-                if (Btn(new Rect(bx, y, bw, 28), "Herkes", true, tTarget < 0 ? Sty.btnOn : Sty.btnSmall)) tTarget = -1;
-                bx += bw + 4;
+                float bw = Mathf.Min(110, (r.xMax - 24 - bx - 4 * (others - 1)) / others);
                 for (int p = 0; p < n; p++)
                 {
                     if (p == me) continue;
                     var chip = new Rect(bx, y, bw, 28);
-                    if (Btn(chip, Esc(s.players[p].name), true, tTarget == p ? Sty.btnOn : Sty.btnSmall)) tTarget = p;
+                    bool on = tTarget < 0 || tTarget == p;
+                    if (Btn(chip, Esc(s.players[p].name), true, on ? Sty.btnOn : Sty.btnSmall)) tTarget = tTarget == p ? -1 : p;
                     Sty.Fill(new Rect(chip.x, chip.y, 4, chip.height), Pal.PlayerColor(s.players[p].color));
                     bx += bw + 4;
                 }

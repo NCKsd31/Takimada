@@ -143,7 +143,7 @@ namespace Takimada
             for (int i = 0; i < T.ResCount; i++)
             {
                 GUILayout.BeginVertical(GUILayout.Width(96));
-                LLabel(T.Res[i], Sty.Colored(Sty.small, Pal.Res[i]));
+                LLabel(T.Res[i], Sty.Colored(Sty.small, Pal.ResText(i)));
                 GUILayout.BeginHorizontal();
                 if (LButton("−", Sty.btnSmall, GUILayout.Width(24), GUILayout.Height(22))) { arr[i] = Math.Max(0, arr[i] - 1); GUI.changed = true; }
                 LLabel(arr[i].ToString(), Sty.center, GUILayout.Width(28));
@@ -169,13 +169,13 @@ namespace Takimada
             IntRow("En fazla oyuncu", ref c.maxPlayers, 2, 8);
             BoolRow("Oyuncu sırası rastgele", ref c.randomTurnOrder);
 
-            Section("Süre", "Zar süresi dolunca zar kendiliğinden atılır, tur süresi dolunca tur biter. Sırası gelen oyuncu her hamle yaptığında süresi uzar (tur süresini aşmaz).");
+            Section("Süre", "Zar süresi dolunca zar kendiliğinden atılır, tur süresi dolunca tur biter. Tamamlanan her işlem (takas, inşa, kart alma/oynama) süreye ek süre ekler; teklif vermek süre kazandırmaz.");
             BoolRow("Tur süresi", ref c.turnTimer);
             if (c.turnTimer)
             {
                 IntRow("Zar atma süresi", ref c.rollSeconds, 3, 120, 1, " sn");
                 IntRow("Ticaret ve inşa süresi", ref c.turnSeconds, 10, 600, 5, " sn");
-                IntRow("Hamle başına ek süre", ref c.actionBonusSeconds, 0, 120, 1, " sn");
+                IntRow("İşlem başına ek süre", ref c.actionBonusSeconds, 0, 120, 1, " sn");
                 IntRow("Kart atma / korsan / ek inşa", ref c.shortPhaseSeconds, 5, 120, 5, " sn");
             }
 

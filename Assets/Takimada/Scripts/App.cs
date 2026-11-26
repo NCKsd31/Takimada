@@ -70,6 +70,7 @@ namespace Takimada
         public BoardView board;
         public Settings settings;
         AudioSource music;
+        public Sfx sfx;
         Hud hud;
 
         // --- yalnız sunucu ---
@@ -110,6 +111,7 @@ namespace Takimada
             ApplySettings();
             if (music.clip != null) music.Play();
             else Debug.LogWarning("Satan: Resources/Music/PastoralStrategy bulunamadı, müzik çalmayacak.");
+            sfx = new Sfx(gameObject);
 
             net = new NetSession();
             net.Init();
@@ -557,7 +559,22 @@ namespace Takimada
             board.SetVisible(true);
             if (board.EnsureBoard(s.board)) hud.FitCamera();
             board.UpdatePieces(s);
+            if (PiecePlaced(prev, s)) sfx.Place();
             hud.OnState(prev, s);
+        }
+
+        /// <summary>Aynı oyunda yeni bir köy/kasaba/yol konduysa ya da korsan taşındıysa.</summary>
+        static bool PiecePlaced(GameState a, GameState b)
+        {
+            if (a == null || b == null || b.turn < a.turn) return false; // ilk durum ya da yeni oyun
+            if (a.vOwner == null || b.vOwner == null || a.vOwner.Length != b.vOwner.Length) return false;
+            if (a.vLevel == null || b.vLevel == null || a.vLevel.Length != b.vLevel.Length) return false;
+            if (a.eOwner == null || b.eOwner == null || a.eOwner.Length != b.eOwner.Length) return false;
+            for (int v = 0; v < b.vOwner.Length; v++)
+                if (b.vOwner[v] >= 0 && (a.vOwner[v] != b.vOwner[v] || a.vLevel[v] < b.vLevel[v])) return true;
+            for (int e = 0; e < b.eOwner.Length; e++)
+                if (b.eOwner[e] >= 0 && a.eOwner[e] != b.eOwner[e]) return true;
+            return a.robber >= 0 && b.robber >= 0 && a.robber != b.robber;
         }
 
         // =====================================================================

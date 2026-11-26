@@ -8,3 +8,15 @@
 *.csproj
 *.sln
 .vs/
+
+# AI asistan dosyalari
+CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.md
+.claude/
+AGENTS.md
+GEMINI.md
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md

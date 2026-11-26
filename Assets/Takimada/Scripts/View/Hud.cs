@@ -52,7 +52,7 @@ namespace Takimada
             hover = candidates == null ? -1 : Board.Nearest(app.state, pickKind, candidates, Board.MouseWorld(mouseRaw));
             flash = Mathf.Max(0, flash - Time.deltaTime * 0.6f);
             int me = app.Me;
-            var accent = me >= 0 ? Pal.PlayerColor(app.state.players[me].color) : Color.white;
+            var accent = me >= 0 ? Pal.PieceColor(app.state.players[me].color) : Color.white;
             Board.UpdateOverlay(app.state, pickKind, candidates, hover, accent, flash, build == BuildMode.City ? 2 : 1);
         }
 
@@ -69,6 +69,7 @@ namespace Takimada
             if (prev != null && prev.board.hexes.Exists(h => h.number < 0) && !s.board.hexes.Exists(h => h.number < 0))
                 Toast("Sayı pulları dağıtıldı!");
             if (prev != null && !app.isLocal) TradeToasts(prev, s);
+            OfferPopups(prev, s);
             if (!cameraFitted) FitCamera();
         }
 
@@ -348,7 +349,7 @@ namespace Takimada
             float ic = r.height - 12;
             GUI.DrawTexture(new Rect(r.x + 6, r.y + 6, ic, ic), Icons.Glyph(res), ScaleMode.ScaleToFit, true);
             GUI.color = old;
-            Label(new Rect(r.x + 6 + ic, r.y, r.width - ic - 8, r.height), count.ToString(), Sty.Colored(Sty.centerBig, Pal.Ink));
+            Label(new Rect(r.x + 6 + ic, r.y, r.width - ic - 8, r.height), count.ToString(), Sty.Colored(Sty.centerBig, Pal.ResInk(res)));
         }
     }
 }

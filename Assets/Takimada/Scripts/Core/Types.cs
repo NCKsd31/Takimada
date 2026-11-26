@@ -113,4 +113,50 @@ namespace Takimada
             return r;
         }
     }
+
+    /// <summary>
+    /// Tohumsuz, gerçek rastgele sayı kaynağı: her sayı işletim sisteminin kriptografik üretecinden
+    /// ayrı ayrı çekilir. Bir önceki sayıdan sonrakini tahmin etmek, oyunlar arasında tekrar eden
+    /// bir sıra ya da desen yoktur. System.Random yerine her yerde kullanılabilir.
+    /// </summary>
+    public sealed class TrueRandom : Random
+    {
+        static readonly System.Security.Cryptography.RandomNumberGenerator Gen =
+            System.Security.Cryptography.RandomNumberGenerator.Create();
+        readonly byte[] buf = new byte[8];
+
+        /// <summary>[0, max) aralığında eşit olasılıklı tam sayı (modülo yanlılığı yok).</summary>
+        uint Below(uint max)
+        {
+            if (max <= 1) return 0;
+            uint limit = uint.MaxValue - uint.MaxValue % max; // bu sınırın üstü reddedilir
+            uint x;
+            do { Gen.GetBytes(buf, 0, 4); x = BitConverter.ToUInt32(buf, 0); } while (x >= limit);
+            return x % max;
+        }
+
+        public override int Next() => (int)Below(int.MaxValue);
+
+        public override int Next(int maxValue)
+        {
+            if (maxValue < 0) throw new ArgumentOutOfRangeException(nameof(maxValue));
+            return (int)Below((uint)maxValue);
+        }
+
+        public override int Next(int minValue, int maxValue)
+        {
+            if (minValue > maxValue) throw new ArgumentOutOfRangeException(nameof(minValue));
+            return (int)(minValue + (long)Below((uint)((long)maxValue - minValue)));
+        }
+
+        public override double NextDouble() => Sample();
+
+        protected override double Sample()
+        {
+            Gen.GetBytes(buf, 0, 8);
+            return (BitConverter.ToUInt64(buf, 0) >> 11) * (1.0 / (1UL << 53)); // 53 bit, [0, 1)
+        }
+
+        public override void NextBytes(byte[] buffer) => Gen.GetBytes(buffer);
+    }
 }

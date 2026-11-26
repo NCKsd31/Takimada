@@ -18,25 +18,28 @@ namespace Takimada
     public class Engine
     {
         public GameState S;
-        readonly Random rng;
+        readonly Random rng;     // oyun içi şans: zar, kart destesi, çalma, otomatik hamleler (her oyunda farklı)
+        readonly Random mapRng;  // harita üretimi (tohum verilmişse tekrarlanabilir)
 
-        Engine(GameState s, Random r) { S = s; rng = r; }
+        Engine(GameState s, Random r, Random map) { S = s; rng = r; mapRng = map; }
 
         public static Engine Create(GameConfig cfgIn, List<SeatInfo> seats)
         {
             var cfg = cfgIn.Clone();
             cfg.Sanitize();
-            int seed = cfg.mapSeed != 0 ? cfg.mapSeed : Environment.TickCount;
-            var rng = new Random(seed);
+            // Oyun içi şans (zar, kart destesi, sıra, çalma) her zaman tohumsuz ve gerçek rastgele.
+            // Harita da öyle; yalnızca kurallarda elle "Tohum" girildiyse o haritayı yeniden üretmek için tohum kullanılır.
+            var rng = new TrueRandom();
+            Random mapRng = cfg.mapSeed != 0 ? new Random(cfg.mapSeed) : new TrueRandom();
             var s = new GameState { cfg = cfg };
-            s.board = BoardGen.Generate(cfg, rng);
+            s.board = BoardGen.Generate(cfg, mapRng);
             if (cfg.numbersAfterSetup) BoardGen.HideNumbers(s.board);
             s.vOwner = Enumerable.Repeat(-1, s.board.verts.Count).ToArray();
             s.vLevel = new int[s.board.verts.Count];
             s.eOwner = Enumerable.Repeat(-1, s.board.edges.Count).ToArray();
 
             var order = seats.ToList();
-            if (cfg.randomTurnOrder) Util.Shuffle(order, new Random(seed ^ 0x5eed));
+            if (cfg.randomTurnOrder) Util.Shuffle(order, rng);
             foreach (var st in order)
             {
                 s.players.Add(new PlayerState
@@ -68,7 +71,7 @@ namespace Takimada
             s.phase = Phase.SetupSettlement;
             s.current = s.setupOrder[0];
             s.turn = 0;
-            var e = new Engine(s, rng);
+            var e = new Engine(s, rng, mapRng);
             e.Log("Oyun başladı. Hedef: " + cfg.victoryPoints + " zafer puanı.");
             e.Log("Sıra: " + string.Join(", ", s.players.Select(p => p.name)));
             return e;
@@ -92,9 +95,9 @@ namespace Takimada
             if (a.get == null || a.get.Length != 5) a.get = new int[5];
             var prevPhase = S.phase;
             int prevActor = Rules.Actor(S), prevTurn = S.turn;
-            bool byActor = !autoAct && a.player == prevActor && a.type != Act.Chat;
+            tradeDone = false;
             string err = ApplyInner(a);
-            if (err == null) UpdateTimer(prevPhase, prevActor, prevTurn, byActor);
+            if (err == null) UpdateTimer(prevPhase, prevActor, prevTurn, !autoAct && Completed(a, prevActor));
             return err;
         }
 
@@ -262,7 +265,7 @@ namespace Takimada
             S.lastSetupVertex = -1;
             if (S.cfg.numbersAfterSetup)
             {
-                BoardGen.AssignNumbers(S.board, S.cfg, rng);
+                BoardGen.AssignNumbers(S.board, S.cfg, mapRng);
                 Log("Sayı pulları dağıtıldı!");
             }
             Log("Başlangıç bitti. İlk tur: " + N(0));
@@ -629,6 +632,7 @@ namespace Takimada
             Util.Add(S.players[partner].res, o.get, -1);
             Util.Add(S.players[o.from].res, o.get);
             S.offers.Remove(o);
+            if (o.from == S.current || partner == S.current) tradeDone = true;
             Log(N(o.from) + " ile " + N(partner) + " takas yaptı: " + Describe(o.give) + " ↔ " + Describe(o.get));
         }
 
@@ -737,15 +741,41 @@ namespace Takimada
             deadline = Clock() + seconds;
         }
 
+        bool tradeDone; // bu hamlede sırası gelen oyuncunun taraf olduğu bir takas gerçekleşti
+
+        /// <summary>
+        /// Hamle ek süre kazandıran, tamamlanmış bir işlem mi: inşa, kart alma/oynama, banka takası
+        /// (sırası gelen yaptıysa) ya da sırası gelen oyuncunun taraf olduğu gerçekleşmiş bir oyuncu takası.
+        /// Teklif vermek, reddetmek, iptal etmek süre kazandırmaz.
+        /// </summary>
+        bool Completed(GameAction a, int actor)
+        {
+            if (tradeDone) return true;
+            if (a.player != actor) return false;
+            switch (a.type)
+            {
+                case Act.PlaceRoad:
+                case Act.PlaceSettlement:
+                case Act.PlaceCity:
+                case Act.BuyDev:
+                case Act.PlayDev:
+                case Act.BankTrade:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         void Bonus()
         {
             if (deadline < 0) return;
-            deadline = Math.Min(deadline + S.cfg.actionBonusSeconds, Clock() + S.cfg.turnSeconds);
+            deadline += S.cfg.actionBonusSeconds;
+            timerTotal = Math.Max(timerTotal, (float)(deadline - Clock()));
         }
 
         /// <summary>
         /// Aşama değiştiyse süreyi yeniden kurar. Ticaret/inşa süresi tur başına bir kez başlar;
-        /// tur içindeki ara aşamalar (muhafızla korsan, yol yapımı) bu süreden yer. Sırası gelen hamle yaptıkça süre uzar.
+        /// tur içindeki ara aşamalar (muhafızla korsan, yol yapımı) bu süreden yer. Tamamlanan her işlem süreyi uzatır.
         /// </summary>
         void UpdateTimer(Phase prevPhase, int prevActor, int prevTurn, bool byActor)
         {

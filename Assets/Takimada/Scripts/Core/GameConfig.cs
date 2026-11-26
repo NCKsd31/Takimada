@@ -21,8 +21,8 @@ namespace Takimada
         // --- Süre ---
         public bool turnTimer = true;
         public int rollSeconds = 10;             // zar atmak için süre; dolunca zar kendiliğinden atılır
-        public int turnSeconds = 50;             // ticaret/inşa süresi; dolunca tur biter
-        public int actionBonusSeconds = 10;      // sırası gelen her hamle yaptığında eklenen süre (turnSeconds'ı aşmaz)
+        public int turnSeconds = 40;             // ticaret/inşa süresi; dolunca tur biter
+        public int actionBonusSeconds = 5;       // tamamlanan her işlemde (takas, inşa, kart alma/oynama) eklenen süre
         public int shortPhaseSeconds = 20;       // kart atma, korsan taşıma, çalma, ek inşa
 
         // --- Harita ---
